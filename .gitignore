@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+
+# 런타임 캐시 (yt-dlp/ffmpeg 바이너리, 히스토리/설정)
+bin/
+*.log
