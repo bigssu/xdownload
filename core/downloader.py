@@ -30,7 +30,6 @@ def build_args(*, url, fmt, quality, out_dir, ytdlp, ffmpeg):
 		ytdlp,
 		"--newline",
 		"--no-warnings",
-		"--no-progress",
 		"--progress",
 		"--concurrent-fragments",
 		"4",
@@ -97,6 +96,7 @@ def download(
 		encoding="utf-8",
 		errors="replace",
 		bufsize=1,
+		stdin=subprocess.DEVNULL,
 		creationflags=_NO_WINDOW,
 	)
 	if on_proc:
@@ -134,6 +134,7 @@ def update_ytdlp(ytdlp):
 			text=True,
 			encoding="utf-8",
 			errors="replace",
+			stdin=subprocess.DEVNULL,
 			timeout=120,
 			creationflags=_NO_WINDOW,
 		)
