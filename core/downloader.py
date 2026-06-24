@@ -74,10 +74,12 @@ def download(
 	on_progress=None,
 	on_line=None,
 	cancel=None,
+	on_proc=None,
 ):
 	"""한 URL을 받는다. 성공 시 0, 취소 시 -1, 그 외 yt-dlp 종료코드를 반환.
 
 	on_progress(percent: float 0-100), on_line(str), cancel: threading.Event.
+	on_proc(proc): 생성된 subprocess를 외부에 노출한다(취소·창닫기 시 직접 종료용).
 	"""
 	args = build_args(
 		url=url,
@@ -97,11 +99,13 @@ def download(
 		bufsize=1,
 		creationflags=_NO_WINDOW,
 	)
+	if on_proc:
+		on_proc(proc)
 	try:
 		for line in proc.stdout:
 			if cancel is not None and cancel.is_set():
 				proc.terminate()
-				return -1
+				break
 			line = line.rstrip()
 			match = _PERCENT_RE.search(line)
 			if match and on_progress:
@@ -113,7 +117,11 @@ def download(
 				on_line(line)
 	finally:
 		proc.stdout.close()
-	return proc.wait()
+	# terminate 후에도 wait로 자식 정리를 보장해 좀비/고아 프로세스를 막는다.
+	code = proc.wait()
+	if cancel is not None and cancel.is_set():
+		return -1
+	return code
 
 
 def update_ytdlp(ytdlp):

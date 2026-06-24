@@ -54,8 +54,12 @@ def _download_ffmpeg(dest, on_progress=None):
 			)
 			if member is None:
 				raise RuntimeError("압축에서 ffmpeg.exe를 찾지 못했습니다.")
-			with archive.open(member) as src, open(dest, "wb") as out:
+			# 쓰기가 중단돼도 손상된 ffmpeg.exe가 남아 재사용되지 않도록
+			# .part에 먼저 쓰고 성공 시 원자적으로 교체한다.
+			tmp = dest.with_suffix(dest.suffix + ".part")
+			with archive.open(member) as src, open(tmp, "wb") as out:
 				shutil.copyfileobj(src, out)
+			tmp.replace(dest)
 
 
 def ensure_binaries(on_progress=None):

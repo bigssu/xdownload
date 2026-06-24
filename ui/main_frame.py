@@ -26,8 +26,10 @@ class MainFrame(wx.Frame):
 		self.config = load_config()
 		self.cancel_event = None
 		self.worker = None
+		self._proc = None
 		self._build_ui()
 		self._refresh_history()
+		self.Bind(wx.EVT_CLOSE, self._on_close)
 		self.Centre()
 
 	def _build_ui(self):
@@ -120,6 +122,7 @@ class MainFrame(wx.Frame):
 		if self.worker and self.worker.is_alive():
 			if self.cancel_event:
 				self.cancel_event.set()
+			self._terminate_proc()
 			self.status_text.SetLabel("취소 중...")
 			return
 		urls = [
@@ -186,6 +189,7 @@ class MainFrame(wx.Frame):
 					on_status=lambda message: wx.CallAfter(
 						self.status_text.SetLabel, message
 					),
+					on_proc=lambda proc: setattr(self, "_proc", proc),
 				)
 			except Exception as error:
 				wx.CallAfter(
@@ -239,3 +243,20 @@ class MainFrame(wx.Frame):
 		self.status_text.SetLabel(message)
 		self.download_btn.SetLabel("다운로드")
 		self.cancel_event = None
+		self._proc = None
+
+	def _terminate_proc(self):
+		"""실행 중인 yt-dlp/ffmpeg 프로세스를 즉시 종료한다(취소·창닫기 공용)."""
+		if self._proc:
+			try:
+				self._proc.terminate()
+			except Exception:
+				pass
+
+	def _on_close(self, event):
+		# 다운로드 중 창을 닫아도 yt-dlp/ffmpeg가 고아 프로세스로 남지 않게 정리한다.
+		if self.worker and self.worker.is_alive():
+			if self.cancel_event:
+				self.cancel_event.set()
+			self._terminate_proc()
+		self.Destroy()
