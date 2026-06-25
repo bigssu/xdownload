@@ -20,6 +20,10 @@ from core.history import add_history, load_history
 _QUALITIES = ["best", "1080p", "720p"]
 _QUALITY_LABELS = ["최고 화질", "1080p", "720p"]
 
+# 다운로드/취소 토글 버튼 라벨 — (&D) 니모닉을 양쪽에서 유지한다.
+_BTN_DOWNLOAD = "다운로드(&D)"
+_BTN_CANCEL = "취소"
+
 
 def _resource_path(name):
 	# PyInstaller로 묶이면 리소스는 임시폴더(sys._MEIPASS)에 풀린다.
@@ -57,14 +61,16 @@ class MainFrame(wx.Frame):
 		panel = wx.Panel(self)
 		root = wx.BoxSizer(wx.VERTICAL)
 
+		# 섹션 시작 요소엔 TOP 간격(12)으로 구분을 주고, 라벨↔필드는 붙여
+		# "라벨이 어느 필드의 것인지" 묶임이 분명히 보이도록 한다.
 		root.Add(
 			wx.StaticText(panel, label="YouTube 링크 (여러 개는 줄바꿈)"),
 			0,
-			wx.LEFT | wx.TOP,
+			wx.LEFT | wx.RIGHT | wx.TOP,
 			12,
 		)
 		self.url_text = wx.TextCtrl(panel, style=wx.TE_MULTILINE, size=(-1, 90))
-		root.Add(self.url_text, 0, wx.EXPAND | wx.ALL, 12)
+		root.Add(self.url_text, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 12)
 
 		row = wx.BoxSizer(wx.HORIZONTAL)
 		self.format_radio = wx.RadioBox(
@@ -85,7 +91,7 @@ class MainFrame(wx.Frame):
 		)
 		qbox.Add(self.quality_choice, 0, wx.ALL, 6)
 		row.Add(qbox, 0)
-		root.Add(row, 0, wx.LEFT | wx.RIGHT, 12)
+		root.Add(row, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12)
 
 		folder_row = wx.BoxSizer(wx.HORIZONTAL)
 		folder_row.Add(
@@ -100,24 +106,31 @@ class MainFrame(wx.Frame):
 		folder_row.Add(
 			self.folder_text, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6
 		)
-		folder_btn = wx.Button(panel, label="변경")
+		folder_btn = wx.Button(panel, label="변경(&B)")
 		folder_btn.Bind(wx.EVT_BUTTON, self._on_pick_folder)
 		folder_row.Add(folder_btn, 0)
-		root.Add(folder_row, 0, wx.EXPAND | wx.ALL, 12)
+		root.Add(folder_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12)
 
-		self.download_btn = wx.Button(panel, label="다운로드")
+		# 주 액션은 볼드+높이로 시각 비중을 키우고 기본 버튼으로 지정해,
+		# 입력창 밖에 포커스가 있을 때 Enter로 바로 실행되게 한다.
+		self.download_btn = wx.Button(panel, label=_BTN_DOWNLOAD)
+		self.download_btn.SetFont(self.download_btn.GetFont().Bold())
+		self.download_btn.SetMinSize((-1, 40))
 		self.download_btn.Bind(wx.EVT_BUTTON, self._on_download)
-		root.Add(self.download_btn, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 12)
+		self.download_btn.SetDefault()
+		root.Add(
+			self.download_btn, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12
+		)
 
 		self.gauge = wx.Gauge(panel, range=100)
-		root.Add(self.gauge, 0, wx.EXPAND | wx.ALL, 12)
+		root.Add(self.gauge, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12)
 		self.status_text = wx.StaticText(panel, label="대기 중")
-		root.Add(self.status_text, 0, wx.LEFT | wx.RIGHT, 12)
+		root.Add(self.status_text, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
 
 		root.Add(
 			wx.StaticText(panel, label="최근 다운로드 (더블클릭 → 폴더 열기)"),
 			0,
-			wx.LEFT | wx.TOP,
+			wx.LEFT | wx.RIGHT | wx.TOP,
 			12,
 		)
 		self.history_list = wx.ListBox(panel)
@@ -164,7 +177,7 @@ class MainFrame(wx.Frame):
 		save_config(self.config)
 
 		self.cancel_event = threading.Event()
-		self.download_btn.SetLabel("취소")
+		self.download_btn.SetLabel(_BTN_CANCEL)
 		self.gauge.SetValue(0)
 		self.worker = threading.Thread(
 			target=self._download_worker,
@@ -262,7 +275,7 @@ class MainFrame(wx.Frame):
 	def _on_finish(self, message):
 		self.gauge.SetValue(0)
 		self.status_text.SetLabel(message)
-		self.download_btn.SetLabel("다운로드")
+		self.download_btn.SetLabel(_BTN_DOWNLOAD)
 		self.cancel_event = None
 		self._proc = None
 
