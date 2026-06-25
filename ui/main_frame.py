@@ -5,6 +5,7 @@
 """
 
 import os
+import sys
 import threading
 from datetime import datetime
 
@@ -20,6 +21,15 @@ _QUALITIES = ["best", "1080p", "720p"]
 _QUALITY_LABELS = ["최고 화질", "1080p", "720p"]
 
 
+def _resource_path(name):
+	# PyInstaller로 묶이면 리소스는 임시폴더(sys._MEIPASS)에 풀린다.
+	# 개발 모드에서는 ui/의 부모인 프로젝트 루트에서 찾는다.
+	base = getattr(sys, "_MEIPASS", None)
+	if base is None:
+		base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+	return os.path.join(base, name)
+
+
 class MainFrame(wx.Frame):
 	def __init__(self):
 		super().__init__(None, title=f"XDownloader v{__version__}", size=(660, 600))
@@ -27,10 +37,21 @@ class MainFrame(wx.Frame):
 		self.cancel_event = None
 		self.worker = None
 		self._proc = None
+		self._set_icon()
 		self._build_ui()
 		self._refresh_history()
 		self.Bind(wx.EVT_CLOSE, self._on_close)
 		self.Centre()
+
+	def _set_icon(self):
+		# 멀티 해상도 .ico를 IconBundle로 한 번에 등록하면 타이틀바·작업표시줄이
+		# 각각 최적 크기를 고른다. 아이콘 로드 실패는 앱 실행을 막지 않는다.
+		try:
+			path = _resource_path("xdownload.ico")
+			if os.path.exists(path):
+				self.SetIcons(wx.IconBundle(path, wx.BITMAP_TYPE_ICO))
+		except Exception:
+			pass
 
 	def _build_ui(self):
 		panel = wx.Panel(self)

@@ -20,8 +20,20 @@ def _fix_dpi_awareness():
 			pass
 
 
+def _set_app_id():
+	# Windows 작업표시줄이 이 앱을 Python 인터프리터가 아닌 독립 앱으로 묶어
+	# 지정한 아이콘을 표시하도록 고유 AppUserModelID를 등록한다.
+	try:
+		ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+			"XDownloader"
+		)
+	except Exception:
+		pass
+
+
 def main():
 	_fix_dpi_awareness()
+	_set_app_id()
 	app = wx.App(False)
 	frame = MainFrame()
 	frame.Show()
