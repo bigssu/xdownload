@@ -5,6 +5,7 @@
 """
 
 import os
+import re
 import sys
 import threading
 from datetime import datetime
@@ -24,6 +25,12 @@ _QUALITY_LABELS = ["최고 화질", "1080p", "720p"]
 _BTN_DOWNLOAD = "다운로드(&D)"
 _BTN_CANCEL = "취소"
 
+# 상태 메시지 의미색 — 성공/실패를 색으로도 구분(네이티브 톤 유지).
+_STATUS_OK = wx.Colour(0, 128, 0)
+_STATUS_WARN = wx.Colour(180, 0, 0)
+# yt-dlp 출력에서 현재 받는 파일명을 추출한다.
+_DEST_RE = re.compile(r"\[download\] Destination: (.+)")
+
 
 def _resource_path(name):
 	# PyInstaller로 묶이면 리소스는 임시폴더(sys._MEIPASS)에 풀린다.
@@ -32,6 +39,13 @@ def _resource_path(name):
 	if base is None:
 		base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 	return os.path.join(base, name)
+
+
+class _ReadOnlyText(wx.TextCtrl):
+	# 읽기 전용 경로 표시 필드 — 키보드 탭 순서에서는 건너뛰되,
+	# 마우스 클릭 포커스(경로 드래그·복사)는 그대로 둔다.
+	def AcceptsFocusFromKeyboard(self):
+		return False
 
 
 class MainFrame(wx.Frame):
@@ -45,6 +59,9 @@ class MainFrame(wx.Frame):
 		self._build_ui()
 		self._refresh_history()
 		self.Bind(wx.EVT_CLOSE, self._on_close)
+		self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+		# 창을 이보다 더 줄이면 컨트롤이 겹치므로 최소 크기를 고정한다.
+		self.SetMinSize((560, 520))
 		self.Centre()
 
 	def _set_icon(self):
@@ -79,7 +96,7 @@ class MainFrame(wx.Frame):
 		self.format_radio.Bind(wx.EVT_RADIOBOX, self._on_format_change)
 		if self.config.get("format") == "mp3":
 			self.format_radio.SetSelection(1)
-		row.Add(self.format_radio, 0, wx.RIGHT, 12)
+		row.Add(self.format_radio, 0, wx.EXPAND | wx.RIGHT, 12)
 
 		qbox = wx.StaticBoxSizer(wx.VERTICAL, panel, "화질 (Mp4)")
 		self.quality_choice = wx.Choice(panel, choices=_QUALITY_LABELS)
@@ -89,8 +106,11 @@ class MainFrame(wx.Frame):
 			if stored_quality in _QUALITIES
 			else 0
 		)
-		qbox.Add(self.quality_choice, 0, wx.ALL, 6)
-		row.Add(qbox, 0)
+		# 드롭다운을 박스 안에서 수직 가운데에 둬 "포맷" 박스와 높이를 맞춘다.
+		qbox.AddStretchSpacer()
+		qbox.Add(self.quality_choice, 0, wx.LEFT | wx.RIGHT, 6)
+		qbox.AddStretchSpacer()
+		row.Add(qbox, 0, wx.EXPAND)
 		root.Add(row, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12)
 
 		folder_row = wx.BoxSizer(wx.HORIZONTAL)
@@ -100,7 +120,7 @@ class MainFrame(wx.Frame):
 			wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
 			6,
 		)
-		self.folder_text = wx.TextCtrl(
+		self.folder_text = _ReadOnlyText(
 			panel, value=self.config["download_dir"], style=wx.TE_READONLY
 		)
 		folder_row.Add(
@@ -178,6 +198,10 @@ class MainFrame(wx.Frame):
 
 		self.cancel_event = threading.Event()
 		self.download_btn.SetLabel(_BTN_CANCEL)
+		# 이전 실행의 실패색이 남지 않도록 시작 시 기본 텍스트색으로 되돌린다.
+		self.status_text.SetForegroundColour(
+			wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOWTEXT)
+		)
 		self.gauge.SetValue(0)
 		self.worker = threading.Thread(
 			target=self._download_worker,
@@ -197,10 +221,14 @@ class MainFrame(wx.Frame):
 				)
 			)
 		except Exception as error:
-			wx.CallAfter(self._on_finish, f"바이너리 준비 실패: {error}")
+			wx.CallAfter(
+				self._on_finish, f"바이너리 준비 실패: {error}", _STATUS_WARN
+			)
 			return
 
 		total = len(urls)
+		success = 0
+		failed = 0
 		for index, url in enumerate(urls, start=1):
 			if self.cancel_event.is_set():
 				break
@@ -219,6 +247,9 @@ class MainFrame(wx.Frame):
 					on_progress=lambda pct: wx.CallAfter(
 						self.gauge.SetValue, int(pct)
 					),
+					on_line=lambda line, i=index: self._on_dl_line(
+						line, i, total
+					),
 					cancel=self.cancel_event,
 					on_status=lambda message: wx.CallAfter(
 						self.status_text.SetLabel, message
@@ -226,18 +257,32 @@ class MainFrame(wx.Frame):
 					on_proc=lambda proc: setattr(self, "_proc", proc),
 				)
 			except Exception as error:
+				failed += 1
 				wx.CallAfter(
 					self.status_text.SetLabel,
 					f"({index}/{total}) 오류: {error}",
 				)
 				continue
 			if code == 0:
+				success += 1
 				wx.CallAfter(self._record_history, url, fmt, quality, out_dir)
 			elif code == -1:
 				break
+			else:
+				failed += 1
 
-		message = "취소됨" if self.cancel_event.is_set() else "완료"
-		wx.CallAfter(self._on_finish, message)
+		# 다중 다운로드에서 개별 실패가 다음 항목 상태에 덮여 사라지지 않도록
+		# 종료 시 성공/실패 건수를 집계해 보여준다.
+		if self.cancel_event.is_set():
+			message = f"취소됨 — 성공 {success}, 실패 {failed}"
+			color = _STATUS_WARN if failed else None
+		elif failed:
+			message = f"완료 — 성공 {success}, 실패 {failed}"
+			color = _STATUS_WARN
+		else:
+			message = f"완료 — {success}개 다운로드"
+			color = _STATUS_OK
+		wx.CallAfter(self._on_finish, message, color)
 
 	def _record_history(self, url, fmt, quality, out_dir):
 		add_history(
@@ -272,12 +317,36 @@ class MainFrame(wx.Frame):
 			except Exception:
 				pass
 
-	def _on_finish(self, message):
+	def _on_finish(self, message, color=None):
 		self.gauge.SetValue(0)
 		self.status_text.SetLabel(message)
+		if color is None:
+			color = wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOWTEXT)
+		self.status_text.SetForegroundColour(color)
+		self.status_text.Refresh()
 		self.download_btn.SetLabel(_BTN_DOWNLOAD)
 		self.cancel_event = None
 		self._proc = None
+
+	def _on_char_hook(self, event):
+		# 다운로드 중 Esc로 취소 — 버튼/창닫기와 같은 토글 경로로 수렴시킨다.
+		if (
+			event.GetKeyCode() == wx.WXK_ESCAPE
+			and self.worker
+			and self.worker.is_alive()
+		):
+			self._on_download(None)
+		else:
+			event.Skip()
+
+	def _on_dl_line(self, line, index, total):
+		# yt-dlp가 알려주는 목적지 파일명을 진행 상태에 노출한다(없으면 무시).
+		match = _DEST_RE.search(line)
+		if match:
+			name = os.path.basename(match.group(1).strip())
+			wx.CallAfter(
+				self.status_text.SetLabel, f"({index}/{total}) {name}"
+			)
 
 	def _terminate_proc(self):
 		"""실행 중인 yt-dlp/ffmpeg 프로세스를 즉시 종료한다(취소·창닫기 공용)."""
