@@ -80,25 +80,23 @@ class MainFrame(wx.Frame):
 
 		# 섹션 시작 요소엔 TOP 간격(12)으로 구분을 주고, 라벨↔필드는 붙여
 		# "라벨이 어느 필드의 것인지" 묶임이 분명히 보이도록 한다.
-		root.Add(
-			wx.StaticText(panel, label="YouTube 링크 (여러 개는 줄바꿈)"),
-			0,
-			wx.LEFT | wx.RIGHT | wx.TOP,
-			12,
-		)
+		url_label = wx.StaticText(panel, label="YouTube 링크 (여러 개는 줄바꿈)")
+		# 섹션 헤더는 볼드로 본문과 위계를 둔다(다운로드 버튼과 동일한 강조 패턴).
+		url_label.SetFont(url_label.GetFont().Bold())
+		root.Add(url_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12)
 		self.url_text = wx.TextCtrl(panel, style=wx.TE_MULTILINE, size=(-1, 90))
 		root.Add(self.url_text, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 12)
 
 		row = wx.BoxSizer(wx.HORIZONTAL)
 		self.format_radio = wx.RadioBox(
-			panel, label="포맷", choices=["Mp4 (영상)", "Mp3 (음원)"]
+			panel, label="포맷", choices=["MP4 (영상)", "MP3 (음원)"]
 		)
 		self.format_radio.Bind(wx.EVT_RADIOBOX, self._on_format_change)
 		if self.config.get("format") == "mp3":
 			self.format_radio.SetSelection(1)
 		row.Add(self.format_radio, 0, wx.EXPAND | wx.RIGHT, 12)
 
-		qbox = wx.StaticBoxSizer(wx.VERTICAL, panel, "화질 (Mp4)")
+		qbox = wx.StaticBoxSizer(wx.VERTICAL, panel, "화질 (MP4)")
 		self.quality_choice = wx.Choice(panel, choices=_QUALITY_LABELS)
 		stored_quality = self.config.get("quality", "best")
 		self.quality_choice.SetSelection(
@@ -147,12 +145,9 @@ class MainFrame(wx.Frame):
 		self.status_text = wx.StaticText(panel, label="대기 중")
 		root.Add(self.status_text, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
 
-		root.Add(
-			wx.StaticText(panel, label="최근 다운로드 (더블클릭 → 폴더 열기)"),
-			0,
-			wx.LEFT | wx.RIGHT | wx.TOP,
-			12,
-		)
+		history_label = wx.StaticText(panel, label="최근 다운로드 (더블클릭 → 폴더 열기)")
+		history_label.SetFont(history_label.GetFont().Bold())
+		root.Add(history_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12)
 		self.history_list = wx.ListBox(panel)
 		self.history_list.Bind(wx.EVT_LISTBOX_DCLICK, self._on_history_open)
 		root.Add(self.history_list, 1, wx.EXPAND | wx.ALL, 12)
