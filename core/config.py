@@ -13,6 +13,9 @@ DEFAULTS = {
 	"download_dir": str(Path.home() / "Downloads"),
 	"format": "mp4",  # mp4 | mp3
 	"quality": "best",  # best | 1080p | 720p
+	"lang": "ko",  # ko | en
+	# theme(light|dark)은 의도적으로 제외 — 최초 실행 시 OS 다크모드 설정을
+	# 감지해 초기화하기 위해 "키 없음" 상태가 필요하다(main_frame._init_theme).
 }
 
 
