@@ -30,6 +30,9 @@ from core.converter import (
 from core.downloader import download_with_auto_update
 from core.history import add_history, load_history
 from core.i18n import tr
+from ui import theme_tokens
+from ui.theme_tokens import PAD_M, PAD_S, PAD_XS, c, dip, f
+from ui.widgets import DarkChoice, FlatButton, SectionCard
 
 _QUALITIES = ["best", "1080p", "720p"]
 
@@ -98,6 +101,7 @@ class MainFrame(wx.Frame):
 		self.config = load_config()
 		self.lang = self.config.get("lang", "ko")
 		self.theme = self._init_theme()
+		theme_tokens.set_theme(self.theme)
 		self.cancel_event = None
 		self.worker = None
 		self._proc = None
@@ -151,15 +155,19 @@ class MainFrame(wx.Frame):
 		label.Bind(wx.EVT_LEFT_DOWN, handler)
 		return label
 
+	def _btn_label(self, key):
+		# 커스텀 FlatButton은 액셀러레이터(&)를 처리하지 않으므로 표시용으로 제거한다.
+		return re.sub(r"\s*\(&.\)", "", self._t(key))
+
 	def _build_ui(self):
 		self.panel = wx.Panel(self)
+		self.panel.SetBackgroundColour(c("bg"))
 		root = wx.BoxSizer(wx.VERTICAL)
 
-		# YouTube 링크 라벨 줄 우측에 토글(한/En + 다크 아이콘)을 함께 둔다.
+		# URL 라벨 줄 우측에 토글(한/En + 테마 아이콘)을 함께 둔다.
 		url_row = wx.BoxSizer(wx.HORIZONTAL)
-		# 섹션 헤더는 볼드로 본문과 위계를 둔다(다운로드 버튼과 동일한 강조 패턴).
 		self.url_label = wx.StaticText(self.panel, label=self._t("url_label"))
-		self.url_label.SetFont(self.url_label.GetFont().Bold())
+		self.url_label.SetFont(f(0, bold=True))
 		url_row.Add(self.url_label, 0, wx.ALIGN_CENTER_VERTICAL)
 		url_row.AddStretchSpacer()
 		self.lang_ko_lbl = self._make_toggle_label("한", self._on_click_ko)
@@ -172,105 +180,74 @@ class MainFrame(wx.Frame):
 		self.theme_btn.SetFont(icon_font)
 		url_row.Add(self.lang_ko_lbl, 0, wx.ALIGN_CENTER_VERTICAL)
 		url_row.Add(
-			self.lang_sep, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT, 4
+			self.lang_sep, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT, dip(PAD_XS)
 		)
 		url_row.Add(self.lang_en_lbl, 0, wx.ALIGN_CENTER_VERTICAL)
-		url_row.Add(self.theme_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 16)
-		root.Add(url_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12)
-		self.url_text = wx.TextCtrl(self.panel, style=wx.TE_MULTILINE, size=(-1, 90))
-		root.Add(self.url_text, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 12)
-
-		row = wx.BoxSizer(wx.HORIZONTAL)
-		# 포맷 — RadioBox 대신 StaticBox+RadioButton로 구성한다. RadioBox의 항목
-		# 텍스트는 MSW에서 색 지정이 무시돼 다크 모드에서 검게 남는 반면,
-		# RadioButton 라벨은 색을 존중하므로 다크에서도 밝게 보인다.
-		fbox = wx.StaticBoxSizer(wx.VERTICAL, self.panel, self._t("format_box"))
-		self.fbox_box = fbox.GetStaticBox()
-		self.rb_mp4 = wx.RadioButton(
-			self.fbox_box, label=self._t("format_mp4"), style=wx.RB_GROUP
+		url_row.Add(self.theme_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, dip(PAD_M))
+		root.Add(url_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, dip(PAD_M))
+		self.url_text = wx.TextCtrl(
+			self.panel, style=wx.TE_MULTILINE, size=(-1, dip(90))
 		)
-		self.rb_mp3 = wx.RadioButton(self.fbox_box, label=self._t("format_mp3"))
-		if self.config.get("format") == "mp3":
-			self.rb_mp3.SetValue(True)
-		else:
-			self.rb_mp4.SetValue(True)
-		self.rb_mp4.Bind(wx.EVT_RADIOBUTTON, self._on_format_change)
-		self.rb_mp3.Bind(wx.EVT_RADIOBUTTON, self._on_format_change)
-		frow = wx.BoxSizer(wx.HORIZONTAL)
-		frow.Add(self.rb_mp4, 0, wx.RIGHT, 12)
-		frow.Add(self.rb_mp3, 0)
-		fbox.AddStretchSpacer()
-		fbox.Add(frow, 0, wx.LEFT | wx.RIGHT, 6)
-		fbox.AddStretchSpacer()
-		row.Add(fbox, 0, wx.EXPAND | wx.RIGHT, 12)
+		root.Add(self.url_text, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, dip(PAD_M))
 
-		qbox = wx.StaticBoxSizer(wx.VERTICAL, self.panel, self._t("quality_box"))
-		self.qbox_box = qbox.GetStaticBox()
+		# 포맷(세그먼트) + 화질(드롭다운) 카드를 좌우로 둔다.
+		row = wx.BoxSizer(wx.HORIZONTAL)
+		fmt_card = SectionCard(self.panel, self._t("format_box"))
+		fmt_card.body.Add(self._build_format_segment(fmt_card), 0, wx.EXPAND)
+		row.Add(fmt_card, 1, wx.EXPAND | wx.RIGHT, dip(PAD_S))
+
+		q_card = SectionCard(self.panel, self._t("quality_box"))
 		quality_labels = [
 			self._t("quality_best"),
 			self._t("quality_1080"),
 			self._t("quality_720"),
 		]
-		self.quality_choice = wx.Choice(self.qbox_box, choices=quality_labels)
+		self.quality_choice = DarkChoice(q_card, quality_labels)
 		stored_quality = self.config.get("quality", "best")
 		self.quality_choice.SetSelection(
 			_QUALITIES.index(stored_quality)
 			if stored_quality in _QUALITIES
 			else 0
 		)
-		# 드롭다운을 박스 안에서 수직 가운데에 둬 "포맷" 박스와 높이를 맞춘다.
-		qbox.AddStretchSpacer()
-		qbox.Add(self.quality_choice, 0, wx.LEFT | wx.RIGHT, 6)
-		qbox.AddStretchSpacer()
-		row.Add(qbox, 0, wx.EXPAND)
-		root.Add(row, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12)
+		q_card.body.Add(self.quality_choice, 0, wx.EXPAND)
+		row.Add(q_card, 1, wx.EXPAND)
+		root.Add(row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, dip(PAD_M))
 
+		# 저장 폴더
 		folder_row = wx.BoxSizer(wx.HORIZONTAL)
 		self.folder_label = wx.StaticText(self.panel, label=self._t("folder_label"))
 		folder_row.Add(
-			self.folder_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6
+			self.folder_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, dip(PAD_S)
 		)
 		self.folder_text = _ReadOnlyText(
 			self.panel, value=self.config["download_dir"], style=wx.TE_READONLY
 		)
 		folder_row.Add(
-			self.folder_text, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6
+			self.folder_text, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, dip(PAD_S)
 		)
-		self.folder_btn = wx.Button(self.panel, label=self._t("folder_btn"))
+		self.folder_btn = FlatButton(self.panel, self._btn_label("folder_btn"), min_w=72)
 		self.folder_btn.Bind(wx.EVT_BUTTON, self._on_pick_folder)
-		folder_row.Add(self.folder_btn, 0)
-		root.Add(folder_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12)
+		folder_row.Add(self.folder_btn, 0, wx.ALIGN_CENTER_VERTICAL)
+		root.Add(folder_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, dip(PAD_M))
 
-		# 주 액션은 볼드+높이로 시각 비중을 키우고 기본 버튼으로 지정해,
-		# 입력창 밖에 포커스가 있을 때 Enter로 바로 실행되게 한다.
-		self.download_btn = wx.Button(self.panel, label=self._t("download_btn"))
-		self.download_btn.SetFont(self.download_btn.GetFont().Bold())
-		self.download_btn.SetMinSize((-1, 40))
+		# 주 액션 — 다운로드(accent). Enter 실행은 _on_char_hook이 보존한다.
+		self.download_btn = FlatButton(
+			self.panel, self._btn_label("download_btn"), btn_style="accent"
+		)
 		self.download_btn.Bind(wx.EVT_BUTTON, self._on_download)
-		self.download_btn.SetDefault()
 		root.Add(
-			self.download_btn, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12
+			self.download_btn, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, dip(PAD_M)
 		)
 
-		convert_box = wx.StaticBoxSizer(
-			wx.VERTICAL, self.panel, self._t("convert_box")
-		)
-		self.convert_box_box = convert_box.GetStaticBox()
-		convert_grid = wx.FlexGridSizer(2, 2, 6, 6)
+		# 로컬 변환 카드 (2x2 FlatButton)
+		conv_card = SectionCard(self.panel, self._t("convert_box"))
+		convert_grid = wx.FlexGridSizer(2, 2, dip(PAD_XS), dip(PAD_XS))
 		convert_grid.AddGrowableCol(0)
 		convert_grid.AddGrowableCol(1)
-		self.video_file_btn = wx.Button(
-			self.convert_box_box, label=self._t("video_file_btn")
-		)
-		self.video_folder_btn = wx.Button(
-			self.convert_box_box, label=self._t("video_folder_btn")
-		)
-		self.image_file_btn = wx.Button(
-			self.convert_box_box, label=self._t("image_file_btn")
-		)
-		self.image_folder_btn = wx.Button(
-			self.convert_box_box, label=self._t("image_folder_btn")
-		)
+		self.video_file_btn = FlatButton(conv_card, self._t("video_file_btn"))
+		self.video_folder_btn = FlatButton(conv_card, self._t("video_folder_btn"))
+		self.image_file_btn = FlatButton(conv_card, self._t("image_file_btn"))
+		self.image_folder_btn = FlatButton(conv_card, self._t("image_folder_btn"))
 		self.video_file_btn.Bind(wx.EVT_BUTTON, self._on_convert_video_files)
 		self.video_folder_btn.Bind(wx.EVT_BUTTON, self._on_convert_video_folder)
 		self.image_file_btn.Bind(wx.EVT_BUTTON, self._on_convert_image_files)
@@ -283,89 +260,67 @@ class MainFrame(wx.Frame):
 		]
 		for button in self.convert_buttons:
 			convert_grid.Add(button, 1, wx.EXPAND)
-		convert_box.Add(convert_grid, 0, wx.EXPAND | wx.ALL, 6)
-		root.Add(convert_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12)
+		conv_card.body.Add(convert_grid, 0, wx.EXPAND)
+		root.Add(conv_card, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, dip(PAD_M))
 
 		self.gauge = _ProgressBar(self.panel)
-		root.Add(self.gauge, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12)
+		root.Add(self.gauge, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, dip(PAD_M))
 		self.status_text = wx.StaticText(self.panel, label=self._t("status_idle"))
-		root.Add(self.status_text, 0, wx.LEFT | wx.RIGHT | wx.TOP, 4)
+		root.Add(self.status_text, 0, wx.LEFT | wx.RIGHT | wx.TOP, dip(PAD_XS))
 
-		self.history_label = wx.StaticText(
-			self.panel, label=self._t("history_label")
-		)
-		self.history_label.SetFont(self.history_label.GetFont().Bold())
-		root.Add(self.history_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12)
-		self.history_list = wx.ListBox(self.panel)
+		# 히스토리 카드
+		hist_card = SectionCard(self.panel, self._t("history_label"))
+		self.history_list = wx.ListBox(hist_card)
 		self.history_list.Bind(wx.EVT_LISTBOX_DCLICK, self._on_history_open)
-		root.Add(self.history_list, 1, wx.EXPAND | wx.ALL, 12)
+		hist_card.body.Add(self.history_list, 1, wx.EXPAND)
+		root.Add(hist_card, 1, wx.EXPAND | wx.ALL, dip(PAD_M))
 
 		self.panel.SetSizer(root)
-		self._on_format_change()
+		self._refresh_format_segment()
+		self.quality_choice.Enable(self.fmt == "mp4")
 		self._apply_theme()
 		self._refresh_history()
 
-	def _palette(self):
-		# 다크는 고정 팔레트, 라이트는 OS 시스템 색을 그대로 쓴다(DESIGN.md 원칙).
-		if self.theme == "dark":
-			return {
-				"bg": wx.Colour(30, 30, 30),
-				"input_bg": wx.Colour(45, 45, 48),
-				"fg": wx.Colour(220, 220, 220),
-				"ok": wx.Colour(78, 201, 118),
-				"warn": wx.Colour(240, 105, 105),
-			}
-		get = wx.SystemSettings.GetColour
-		return {
-			"bg": get(wx.SYS_COLOUR_BTNFACE),
-			"input_bg": get(wx.SYS_COLOUR_WINDOW),
-			"fg": get(wx.SYS_COLOUR_WINDOWTEXT),
-			"ok": wx.Colour(0, 128, 0),
-			"warn": wx.Colour(180, 0, 0),
-		}
+	def _build_format_segment(self, parent):
+		# mp4/mp3를 2-버튼 세그먼트로 표현한다(active=accent).
+		self.fmt = "mp3" if self.config.get("format") == "mp3" else "mp4"
+		self.seg_mp4 = FlatButton(parent, self._t("format_mp4"), min_w=90)
+		self.seg_mp3 = FlatButton(parent, self._t("format_mp3"), min_w=90)
+		self.seg_mp4.Bind(wx.EVT_BUTTON, lambda e: self._on_format_toggle("mp4"))
+		self.seg_mp3.Bind(wx.EVT_BUTTON, lambda e: self._on_format_toggle("mp3"))
+		row = wx.BoxSizer(wx.HORIZONTAL)
+		row.Add(self.seg_mp4, 1, wx.EXPAND | wx.RIGHT, dip(PAD_XS))
+		row.Add(self.seg_mp3, 1, wx.EXPAND)
+		return row
+
+	def _refresh_format_segment(self):
+		self.seg_mp4.btn_style = "accent" if self.fmt == "mp4" else "secondary"
+		self.seg_mp3.btn_style = "accent" if self.fmt == "mp3" else "secondary"
+		self.seg_mp4.Refresh()
+		self.seg_mp3.Refresh()
+
+	def _on_format_toggle(self, fmt):
+		self.fmt = fmt
+		self.config["format"] = fmt
+		save_config(self.config)
+		self._refresh_format_segment()
+		self.quality_choice.Enable(fmt == "mp4")
 
 	def _apply_theme(self):
-		# 위젯을 파괴하지 않고 현재 테마 색으로 다시 칠한다(다운로드 중에도 안전).
-		# Windows 네이티브 한계로 게이지·드롭다운 팝업은 색이 부분만 먹을 수 있다.
-		palette = self._palette()
-		self._fg = palette["fg"]
-		self._ok = palette["ok"]
-		self._warn = palette["warn"]
-		self.panel.SetBackgroundColour(palette["bg"])
-		surface = (
-			self.url_label,
-			self.fbox_box,
-			self.qbox_box,
-			self.rb_mp4,
-			self.rb_mp3,
-			self.folder_label,
-			self.folder_btn,
-			self.download_btn,
-			self.convert_box_box,
-			self.video_file_btn,
-			self.video_folder_btn,
-			self.image_file_btn,
-			self.image_folder_btn,
-			self.history_label,
-			self.status_text,
-		)
-		for widget in surface:
-			widget.SetBackgroundColour(palette["bg"])
-			widget.SetForegroundColour(palette["fg"])
-		inputs = (
-			self.url_text,
-			self.folder_text,
-			self.quality_choice,
-			self.history_list,
-		)
-		for widget in inputs:
-			widget.SetBackgroundColour(palette["input_bg"])
-			widget.SetForegroundColour(palette["fg"])
-		if self.theme == "dark":
-			self.gauge.set_colours(wx.Colour(60, 60, 63), wx.Colour(0, 140, 236))
-		else:
-			self.gauge.set_colours(wx.Colour(220, 220, 220), wx.Colour(0, 120, 215))
-		self._style_toggles(palette)
+		# 토큰 위젯(SectionCard/FlatButton/DarkChoice)은 자체 색을 갖고, 테마 전환 시
+		# 패널이 재생성된다. 여기서는 네이티브/텍스트 위젯 색과 토글만 토큰으로 맞춘다.
+		self._fg = c("text")
+		self._ok = c("ok")
+		self._warn = c("err")
+		self.panel.SetBackgroundColour(c("bg"))
+		for widget in (self.url_label, self.folder_label, self.status_text):
+			widget.SetBackgroundColour(c("bg"))
+			widget.SetForegroundColour(c("text"))
+		for widget in (self.url_text, self.folder_text, self.history_list):
+			widget.SetBackgroundColour(c("surface"))
+			widget.SetForegroundColour(c("text"))
+		self.gauge.set_colours(c("surface"), c("accent"))
+		self._style_toggles()
 		self._apply_native_dark()
 		self.panel.Refresh()
 
@@ -387,14 +342,10 @@ class MainFrame(wx.Frame):
 			winapi.set_control_dark(ctrl.GetHandle(), dark)
 		winapi.set_control_dark(self.quality_choice.GetHandle(), dark, kind="combo")
 
-	def _style_toggles(self, palette):
-		# 상단 토글: 현재 언어 강조(볼드+accent), 비활성/다운로드중은 muted.
-		accent = (
-			wx.Colour(90, 160, 255)
-			if self.theme == "dark"
-			else wx.Colour(0, 102, 204)
-		)
-		muted = wx.Colour(140, 140, 140)
+	def _style_toggles(self):
+		# 상단 토글: 현재 언어 강조(볼드+accent), 비활성/작업중은 muted.
+		accent = c("accent")
+		muted = c("text_dim")
 		font = self.lang_ko_lbl.GetFont()
 		font.SetWeight(wx.FONTWEIGHT_NORMAL)
 		bold = font.Bold()
@@ -402,33 +353,29 @@ class MainFrame(wx.Frame):
 			label.SetFont(bold if code == self.lang else font)
 			active = self._lang_enabled and code == self.lang
 			label.SetForegroundColour(accent if active else muted)
-			label.SetBackgroundColour(palette["bg"])
+			label.SetBackgroundColour(c("bg"))
 		self.lang_sep.SetForegroundColour(muted)
-		self.lang_sep.SetBackgroundColour(palette["bg"])
+		self.lang_sep.SetBackgroundColour(c("bg"))
 		# 다크면 해(클릭→라이트), 라이트면 달(클릭→다크) 아이콘을 보여준다.
 		self.theme_btn.SetLabel("☀" if self.theme == "dark" else "☾")
-		self.theme_btn.SetForegroundColour(palette["fg"])
-		self.theme_btn.SetBackgroundColour(palette["bg"])
+		self.theme_btn.SetForegroundColour(c("text"))
+		self.theme_btn.SetBackgroundColour(c("bg"))
 
 	def _rebuild_ui(self):
-		# 언어 변경 시 입력/선택 상태를 보존했다가 새 언어로 다시 그린다.
+		# 언어/테마 변경 시 입력/선택 상태를 보존했다가 다시 그린다.
+		# 포맷(self.fmt)은 config에 동기화돼 있어 _build_ui가 그대로 복원한다.
 		state = {
 			"url": self.url_text.GetValue(),
-			"format": "mp3" if self.rb_mp3.GetValue() else "mp4",
 			"quality": self.quality_choice.GetSelection(),
 			"gauge": self.gauge.GetValue(),
 		}
 		self.panel.Destroy()
 		self._build_ui()
 		self.url_text.SetValue(state["url"])
-		if state["format"] == "mp3":
-			self.rb_mp3.SetValue(True)
-		else:
-			self.rb_mp4.SetValue(True)
 		if state["quality"] >= 0:
 			self.quality_choice.SetSelection(state["quality"])
 		self.gauge.SetValue(state["gauge"])
-		self._on_format_change()
+		self.quality_choice.Enable(self.fmt == "mp4")
 		self.Layout()
 
 	def _on_click_ko(self, event):
@@ -443,7 +390,8 @@ class MainFrame(wx.Frame):
 		self.theme = "light" if self.theme == "dark" else "dark"
 		self.config["theme"] = self.theme
 		save_config(self.config)
-		self._apply_theme()
+		theme_tokens.set_theme(self.theme)
+		self._rebuild_ui()
 
 	def _set_lang(self, lang):
 		if lang == self.lang:
@@ -473,9 +421,6 @@ class MainFrame(wx.Frame):
 		self.worker = threading.Thread(target=target, args=args, daemon=True)
 		self.worker.start()
 
-	def _on_format_change(self, event=None):
-		self.quality_choice.Enable(self.rb_mp4.GetValue())
-
 	def _on_pick_folder(self, event):
 		with wx.DirDialog(
 			self, self._t("pick_folder"), defaultPath=self.config["download_dir"]
@@ -499,7 +444,7 @@ class MainFrame(wx.Frame):
 				self._t("need_url"), "XDownloader", wx.OK | wx.ICON_INFORMATION
 			)
 			return
-		fmt = "mp4" if self.rb_mp4.GetValue() else "mp3"
+		fmt = self.fmt
 		selection = self.quality_choice.GetSelection()
 		quality = _QUALITIES[selection] if selection >= 0 else "best"
 		self.config["format"] = fmt
@@ -757,22 +702,26 @@ class MainFrame(wx.Frame):
 		self.status_text.SetLabel(message)
 		self.status_text.SetForegroundColour(color if color is not None else self._fg)
 		self.status_text.Refresh()
-		self.download_btn.SetLabel(self._t("download_btn"))
+		self.download_btn.SetLabel(self._btn_label("download_btn"))
 		self._set_conversion_controls_enabled(True)
 		self._set_lang_toggle_enabled(True)
 		self.cancel_event = None
 		self._proc = None
 
 	def _on_char_hook(self, event):
+		code = event.GetKeyCode()
 		# 작업 중 Esc로 취소 — 버튼/창닫기와 같은 토글 경로로 수렴시킨다.
-		if (
-			event.GetKeyCode() == wx.WXK_ESCAPE
-			and self.worker
-			and self.worker.is_alive()
-		):
+		if code == wx.WXK_ESCAPE and self.worker and self.worker.is_alive():
 			self._cancel_active()
-		else:
-			event.Skip()
+			return
+		# 입력창 밖에서 Enter로 다운로드 실행(멀티라인 입력창 안에서는 줄바꿈 유지).
+		if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and not isinstance(
+			self.FindFocus(), wx.TextCtrl
+		):
+			if not (self.worker and self.worker.is_alive()):
+				self._on_download(None)
+				return
+		event.Skip()
 
 	def _on_dl_line(self, line, index, total):
 		# yt-dlp가 알려주는 목적지 파일명을 진행 상태에 노출한다(없으면 무시).

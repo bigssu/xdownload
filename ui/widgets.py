@@ -47,6 +47,10 @@ class FlatButton(wx.Window):
 			self.GetEventHandler().ProcessEvent(evt)
 		event.Skip()
 
+	def SetLabel(self, label):
+		self.label = label
+		self.Refresh()
+
 	def _set_hover(self, value):
 		if self._hover != value:
 			self._hover = value
