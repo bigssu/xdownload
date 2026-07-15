@@ -48,7 +48,7 @@ _IC_AUDIO = "\uE8D6"
 _IC_FILM = "\uE8B2"
 _IC_IMAGE = "\uE91B"
 _BADGE_FILE = "\uE7C3"
-_BADGE_FOLDER = "\uE8B7"
+_BADGE_FOLDER = "\uED25"
 
 
 def _resource_path(name):

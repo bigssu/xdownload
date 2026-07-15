@@ -104,7 +104,7 @@ class FlatButton(wx.Window):
 			iw, ih = gc.GetTextExtent(self.icon)
 			gc.DrawText(self.icon, (w - iw) / 2, (h - ih) / 2)
 			if self.badge:
-				gc.SetFont(gc.CreateFont(icon_font(FONT_BASE - 1), text_col))
+				gc.SetFont(gc.CreateFont(icon_font(FONT_BASE + 6), text_col))
 				bw, bh = gc.GetTextExtent(self.badge)
 				gc.DrawText(self.badge, w - bw - self._dip_1 * 3, h - bh - self._dip_1 * 2)
 		else:
