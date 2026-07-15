@@ -21,6 +21,11 @@ YouTube는 데이터센터 IP(클라우드 서버)를 봇으로 강하게 차단
 - 진행률 바
 - 저장 폴더 지정 (기본: Downloads)
 - 다운로드 히스토리 (로컬 저장)
+- 로컬 동영상 변환: 선택 파일/폴더 → MP4 / H.264 / AAC / 1080p 이하
+- 로컬 이미지 변환: 선택 파일/폴더 → JPG
+
+로컬 변환은 원본 파일을 유지하고 원본 옆에 새 파일을 만든다. 폴더 선택은 선택한
+폴더 바로 아래 파일을 대상으로 한다.
 
 ## 구조
 
@@ -29,6 +34,7 @@ YouTube는 데이터센터 IP(클라우드 서버)를 봇으로 강하게 차단
 | `main.py` | 진입점 — wxPython App 실행 |
 | `ui/main_frame.py` | 메인 창 (URL 입력·포맷/화질·진행률·히스토리) |
 | `core/downloader.py` | yt-dlp 호출 + 진행률 파싱 (H.264 우선 format, mp4 remux) |
+| `core/converter.py` | ffmpeg 로컬 변환 (동영상 MP4/H.264/AAC/1080p, 이미지 JPG) |
 | `core/binaries.py` | yt-dlp/ffmpeg 바이너리 첫 실행 시 자동 다운로드·캐시 |
 | `core/history.py` | 다운로드 히스토리 저장 (JSON) |
 | `core/config.py` | 설정 (저장 폴더 등) |
@@ -45,6 +51,7 @@ YouTube는 데이터센터 IP(클라우드 서버)를 봇으로 강하게 차단
 
 `core/binaries.py`가 첫 실행 시 yt-dlp.exe와 ffmpeg.exe를 받아
 `%LOCALAPPDATA%/XDownloader/bin/`에 캐시한다. yt-dlp는 자가 업데이트(`-U`)로 최신 유지.
+로컬 변환만 사용할 때는 ffmpeg.exe만 준비한다.
 
 ## 개발
 

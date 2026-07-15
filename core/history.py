@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from core.config import APP_DIR
+from core.config import APP_DIR, atomic_write_json
 
 HISTORY_PATH = APP_DIR / "history.json"
 MAX_ITEMS = 100
@@ -23,13 +23,4 @@ def add_history(entry):
 	items = load_history()
 	items.insert(0, entry)
 	del items[MAX_ITEMS:]
-	try:
-		APP_DIR.mkdir(parents=True, exist_ok=True)
-		# 쓰기 도중 실패해도 기존 히스토리가 손상되지 않도록 임시파일에 쓰고 교체한다.
-		tmp = HISTORY_PATH.with_suffix(HISTORY_PATH.suffix + ".tmp")
-		with open(tmp, "w", encoding="utf-8") as handle:
-			json.dump(items, handle, ensure_ascii=False, indent=2)
-		tmp.replace(HISTORY_PATH)
-	except Exception:
-		pass
-	return items
+	atomic_write_json(HISTORY_PATH, items)

@@ -113,16 +113,29 @@ def _download_ffmpeg(dest, on_progress=None):
 			tmp.replace(dest)
 
 
-def ensure_binaries(on_progress=None):
-	"""yt-dlp.exe, ffmpeg.exe 경로를 보장해 (ytdlp_path, ffmpeg_path)로 반환한다."""
+def ensure_ytdlp(on_progress=None):
+	"""yt-dlp.exe 경로를 보장해 반환한다."""
 	BIN_DIR.mkdir(parents=True, exist_ok=True)
 	ytdlp = BIN_DIR / "yt-dlp.exe"
-	ffmpeg = BIN_DIR / "ffmpeg.exe"
 	if not ytdlp.exists():
 		expected = _fetch_expected_sha256(YTDLP_SUMS_URL, "yt-dlp.exe")
 		_download_file(
 			YTDLP_URL, ytdlp, on_progress, "yt-dlp", expected_sha=expected
 		)
+	return str(ytdlp)
+
+
+def ensure_ffmpeg(on_progress=None):
+	"""ffmpeg.exe 경로를 보장해 반환한다."""
+	BIN_DIR.mkdir(parents=True, exist_ok=True)
+	ffmpeg = BIN_DIR / "ffmpeg.exe"
 	if not ffmpeg.exists():
 		_download_ffmpeg(ffmpeg, on_progress)
+	return str(ffmpeg)
+
+
+def ensure_binaries(on_progress=None):
+	"""yt-dlp.exe, ffmpeg.exe 경로를 보장해 (ytdlp_path, ffmpeg_path)로 반환한다."""
+	ytdlp = ensure_ytdlp(on_progress)
+	ffmpeg = ensure_ffmpeg(on_progress)
 	return str(ytdlp), str(ffmpeg)

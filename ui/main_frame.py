@@ -18,8 +18,15 @@ import wx
 
 from core import __version__
 from core import winapi
-from core.binaries import ensure_binaries
+from core.binaries import ensure_binaries, ensure_ffmpeg
 from core.config import load_config, save_config
+from core.converter import (
+	IMAGE_EXTS,
+	VIDEO_EXTS,
+	collect_media_files,
+	convert_image,
+	convert_video,
+)
 from core.downloader import download_with_auto_update
 from core.history import add_history, load_history
 from core.i18n import tr
@@ -87,7 +94,7 @@ class _ProgressBar(wx.Panel):
 
 class MainFrame(wx.Frame):
 	def __init__(self):
-		super().__init__(None, title=f"XDownloader v{__version__}", size=(660, 600))
+		super().__init__(None, title=f"XDownloader v{__version__}", size=(680, 700))
 		self.config = load_config()
 		self.lang = self.config.get("lang", "ko")
 		self.theme = self._init_theme()
@@ -95,6 +102,7 @@ class MainFrame(wx.Frame):
 		self.worker = None
 		self._proc = None
 		self._lang_enabled = True
+		self.convert_buttons = []
 		# 컨트롤 생성 전에 앱 다크모드를 설정해야 스크롤바 등이 처음부터 다크로 뜬다.
 		winapi.enable_app_dark_mode(self.theme == "dark")
 		self._set_icon()
@@ -104,7 +112,7 @@ class MainFrame(wx.Frame):
 		# 타이틀바 다크는 창이 실제로 표시된 뒤 재적용해야 wx가 덮어쓰지 않는다.
 		self.Bind(wx.EVT_SHOW, self._on_show)
 		# 창을 이보다 더 줄이면 컨트롤이 겹치므로 최소 크기를 고정한다.
-		self.SetMinSize((560, 520))
+		self.SetMinSize((600, 620))
 		self.Centre()
 
 	def _t(self, key):
@@ -244,6 +252,40 @@ class MainFrame(wx.Frame):
 			self.download_btn, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12
 		)
 
+		convert_box = wx.StaticBoxSizer(
+			wx.VERTICAL, self.panel, self._t("convert_box")
+		)
+		self.convert_box_box = convert_box.GetStaticBox()
+		convert_grid = wx.FlexGridSizer(2, 2, 6, 6)
+		convert_grid.AddGrowableCol(0)
+		convert_grid.AddGrowableCol(1)
+		self.video_file_btn = wx.Button(
+			self.convert_box_box, label=self._t("video_file_btn")
+		)
+		self.video_folder_btn = wx.Button(
+			self.convert_box_box, label=self._t("video_folder_btn")
+		)
+		self.image_file_btn = wx.Button(
+			self.convert_box_box, label=self._t("image_file_btn")
+		)
+		self.image_folder_btn = wx.Button(
+			self.convert_box_box, label=self._t("image_folder_btn")
+		)
+		self.video_file_btn.Bind(wx.EVT_BUTTON, self._on_convert_video_files)
+		self.video_folder_btn.Bind(wx.EVT_BUTTON, self._on_convert_video_folder)
+		self.image_file_btn.Bind(wx.EVT_BUTTON, self._on_convert_image_files)
+		self.image_folder_btn.Bind(wx.EVT_BUTTON, self._on_convert_image_folder)
+		self.convert_buttons = [
+			self.video_file_btn,
+			self.video_folder_btn,
+			self.image_file_btn,
+			self.image_folder_btn,
+		]
+		for button in self.convert_buttons:
+			convert_grid.Add(button, 1, wx.EXPAND)
+		convert_box.Add(convert_grid, 0, wx.EXPAND | wx.ALL, 6)
+		root.Add(convert_box, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12)
+
 		self.gauge = _ProgressBar(self.panel)
 		root.Add(self.gauge, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12)
 		self.status_text = wx.StaticText(self.panel, label=self._t("status_idle"))
@@ -299,6 +341,11 @@ class MainFrame(wx.Frame):
 			self.folder_label,
 			self.folder_btn,
 			self.download_btn,
+			self.convert_box_box,
+			self.video_file_btn,
+			self.video_folder_btn,
+			self.image_file_btn,
+			self.image_folder_btn,
 			self.history_label,
 			self.status_text,
 		)
@@ -407,9 +454,24 @@ class MainFrame(wx.Frame):
 		self._rebuild_ui()
 
 	def _set_lang_toggle_enabled(self, enabled):
-		# 다운로드 중 패널 재생성은 워커가 잡은 위젯 참조를 깨뜨리므로 언어 전환을 막는다.
+		# 작업 중 패널 재생성은 워커가 잡은 위젯 참조를 깨뜨리므로 언어 전환을 막는다.
 		self._lang_enabled = enabled
 		self._apply_theme()
+
+	def _set_conversion_controls_enabled(self, enabled):
+		for button in self.convert_buttons:
+			button.Enable(enabled)
+
+	def _launch_worker(self, target, *args):
+		self.cancel_event = threading.Event()
+		self.download_btn.SetLabel(self._t("cancel_btn"))
+		self._set_conversion_controls_enabled(False)
+		self._set_lang_toggle_enabled(False)
+		# 이전 실행의 실패색이 남지 않도록 시작 시 테마 기본 텍스트색으로 되돌린다.
+		self.status_text.SetForegroundColour(self._fg)
+		self.gauge.SetValue(0)
+		self.worker = threading.Thread(target=target, args=args, daemon=True)
+		self.worker.start()
 
 	def _on_format_change(self, event=None):
 		self.quality_choice.Enable(self.rb_mp4.GetValue())
@@ -425,10 +487,7 @@ class MainFrame(wx.Frame):
 
 	def _on_download(self, event):
 		if self.worker and self.worker.is_alive():
-			if self.cancel_event:
-				self.cancel_event.set()
-			self._terminate_proc()
-			self.status_text.SetLabel(self._t("cancelling"))
+			self._cancel_active()
 			return
 		urls = [
 			line.strip()
@@ -447,18 +506,140 @@ class MainFrame(wx.Frame):
 		self.config["quality"] = quality
 		save_config(self.config)
 
-		self.cancel_event = threading.Event()
-		self.download_btn.SetLabel(self._t("cancel_btn"))
-		self._set_lang_toggle_enabled(False)
-		# 이전 실행의 실패색이 남지 않도록 시작 시 테마 기본 텍스트색으로 되돌린다.
-		self.status_text.SetForegroundColour(self._fg)
-		self.gauge.SetValue(0)
-		self.worker = threading.Thread(
-			target=self._download_worker,
-			args=(urls, fmt, quality, self.config["download_dir"]),
-			daemon=True,
+		self._launch_worker(
+			self._download_worker, urls, fmt, quality, self.config["download_dir"]
 		)
-		self.worker.start()
+
+	def _media_wildcard(self, label_key, exts):
+		patterns = ";".join(f"*{ext}" for ext in sorted(exts))
+		return (
+			f"{self._t(label_key)} ({patterns})|{patterns}|"
+			f"{self._t('all_files')} (*.*)|*.*"
+		)
+
+	def _pick_media_files(self, kind):
+		if kind == "video":
+			message = self._t("pick_video_files")
+			wildcard = self._media_wildcard("video_files", VIDEO_EXTS)
+		else:
+			message = self._t("pick_image_files")
+			wildcard = self._media_wildcard("image_files", IMAGE_EXTS)
+		with wx.FileDialog(
+			self,
+			message,
+			wildcard=wildcard,
+			style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST | wx.FD_MULTIPLE,
+		) as dlg:
+			if dlg.ShowModal() == wx.ID_OK:
+				return dlg.GetPaths()
+		return []
+
+	def _pick_media_folder(self, kind):
+		message = (
+			self._t("pick_video_folder")
+			if kind == "video"
+			else self._t("pick_image_folder")
+		)
+		with wx.DirDialog(self, message) as dlg:
+			if dlg.ShowModal() == wx.ID_OK:
+				return [dlg.GetPath()]
+		return []
+
+	def _on_convert_video_files(self, event):
+		self._start_conversion("video", self._pick_media_files("video"))
+
+	def _on_convert_video_folder(self, event):
+		self._start_conversion("video", self._pick_media_folder("video"))
+
+	def _on_convert_image_files(self, event):
+		self._start_conversion("image", self._pick_media_files("image"))
+
+	def _on_convert_image_folder(self, event):
+		self._start_conversion("image", self._pick_media_folder("image"))
+
+	def _start_conversion(self, kind, sources):
+		if self.worker and self.worker.is_alive():
+			self._cancel_active()
+			return
+		if not sources:
+			return
+		files = collect_media_files(sources, kind)
+		if not files:
+			wx.MessageBox(
+				self._t("need_convert_files"),
+				"XDownloader",
+				wx.OK | wx.ICON_INFORMATION,
+			)
+			return
+
+		self._launch_worker(self._convert_worker, kind, files)
+
+	def _convert_worker(self, kind, files):
+		wx.CallAfter(self.status_text.SetLabel, self._t("prep_ffmpeg"))
+		try:
+			ffmpeg = ensure_ffmpeg(
+				on_progress=lambda label, frac: wx.CallAfter(
+					self.gauge.SetValue, int(frac * 100)
+				)
+			)
+		except Exception as error:
+			wx.CallAfter(
+				self._on_finish,
+				self._t("binary_fail").format(error=error),
+				self._warn,
+			)
+			return
+
+		total = len(files)
+		success = 0
+		failed = 0
+		for index, path in enumerate(files, start=1):
+			if self.cancel_event.is_set():
+				break
+			wx.CallAfter(self.gauge.SetValue, 0)
+			wx.CallAfter(
+				self.status_text.SetLabel,
+				self._t("convert_progress_file").format(
+					i=index, n=total, name=path.name
+				),
+			)
+			try:
+				if kind == "video":
+					code = convert_video(
+						path,
+						ffmpeg,
+						on_progress=lambda pct: wx.CallAfter(
+							self.gauge.SetValue, int(pct)
+						),
+						cancel=self.cancel_event,
+						on_proc=lambda proc: setattr(self, "_proc", proc),
+					)
+				else:
+					code = convert_image(
+						path,
+						ffmpeg,
+						cancel=self.cancel_event,
+						on_proc=lambda proc: setattr(self, "_proc", proc),
+					)
+					if code == 0:
+						wx.CallAfter(self.gauge.SetValue, 100)
+			except Exception as error:
+				failed += 1
+				wx.CallAfter(
+					self.status_text.SetLabel,
+					self._t("convert_item_error").format(
+						i=index, n=total, error=error
+					),
+				)
+				continue
+			if code == 0:
+				success += 1
+			elif code == -1:
+				break
+			else:
+				failed += 1
+
+		self._report_counts("convert_done_ok", success, failed)
 
 	def _download_worker(self, urls, fmt, quality, out_dir):
 		wx.CallAfter(self.status_text.SetLabel, self._t("prep_binaries"))
@@ -524,16 +705,7 @@ class MainFrame(wx.Frame):
 
 		# 다중 다운로드에서 개별 실패가 다음 항목 상태에 덮여 사라지지 않도록
 		# 종료 시 성공/실패 건수를 집계해 보여준다.
-		if self.cancel_event.is_set():
-			message = self._t("cancelled").format(s=success, f=failed)
-			color = self._warn if failed else None
-		elif failed:
-			message = self._t("done_fail").format(s=success, f=failed)
-			color = self._warn
-		else:
-			message = self._t("done_ok").format(s=success)
-			color = self._ok
-		wx.CallAfter(self._on_finish, message, color)
+		self._report_counts("done_ok", success, failed)
 
 	def _record_history(self, url, fmt, quality, out_dir):
 		add_history(
@@ -568,24 +740,37 @@ class MainFrame(wx.Frame):
 			except Exception:
 				pass
 
+	def _report_counts(self, done_ok_key, success, failed):
+		if self.cancel_event.is_set():
+			message = self._t("cancelled").format(s=success, f=failed)
+			color = self._warn if failed else None
+		elif failed:
+			message = self._t("done_fail").format(s=success, f=failed)
+			color = self._warn
+		else:
+			message = self._t(done_ok_key).format(s=success)
+			color = self._ok
+		wx.CallAfter(self._on_finish, message, color)
+
 	def _on_finish(self, message, color=None):
 		self.gauge.SetValue(0)
 		self.status_text.SetLabel(message)
 		self.status_text.SetForegroundColour(color if color is not None else self._fg)
 		self.status_text.Refresh()
 		self.download_btn.SetLabel(self._t("download_btn"))
+		self._set_conversion_controls_enabled(True)
 		self._set_lang_toggle_enabled(True)
 		self.cancel_event = None
 		self._proc = None
 
 	def _on_char_hook(self, event):
-		# 다운로드 중 Esc로 취소 — 버튼/창닫기와 같은 토글 경로로 수렴시킨다.
+		# 작업 중 Esc로 취소 — 버튼/창닫기와 같은 토글 경로로 수렴시킨다.
 		if (
 			event.GetKeyCode() == wx.WXK_ESCAPE
 			and self.worker
 			and self.worker.is_alive()
 		):
-			self._on_download(None)
+			self._cancel_active()
 		else:
 			event.Skip()
 
@@ -607,10 +792,14 @@ class MainFrame(wx.Frame):
 			except Exception:
 				pass
 
+	def _cancel_active(self):
+		if self.cancel_event:
+			self.cancel_event.set()
+		self._terminate_proc()
+		self.status_text.SetLabel(self._t("cancelling"))
+
 	def _on_close(self, event):
-		# 다운로드 중 창을 닫아도 yt-dlp/ffmpeg가 고아 프로세스로 남지 않게 정리한다.
+		# 작업 중 창을 닫아도 yt-dlp/ffmpeg가 고아 프로세스로 남지 않게 정리한다.
 		if self.worker and self.worker.is_alive():
-			if self.cancel_event:
-				self.cancel_event.set()
-			self._terminate_proc()
+			self._cancel_active()
 		self.Destroy()
