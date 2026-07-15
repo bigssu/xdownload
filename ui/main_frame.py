@@ -39,6 +39,17 @@ _QUALITIES = ["best", "1080p", "720p"]
 # yt-dlp 출력에서 현재 받는 파일명을 추출한다.
 _DEST_RE = re.compile(r"\[download\] Destination: (.+)")
 
+# Segoe MDL2 Assets 아이콘 글리프(Windows 내장 폰트).
+_IC_DOWNLOAD = "\uE896"
+_IC_CANCEL = "\uE711"
+_IC_FOLDER = "\uED25"
+_IC_VIDEO = "\uE714"
+_IC_AUDIO = "\uE8D6"
+_IC_FILM = "\uE8B2"
+_IC_IMAGE = "\uE91B"
+_BADGE_FILE = "\uE7C3"
+_BADGE_FOLDER = "\uE8B7"
+
 
 def _resource_path(name):
 	# PyInstaller로 묶이면 리소스는 임시폴더(sys._MEIPASS)에 풀린다.
@@ -225,14 +236,16 @@ class MainFrame(wx.Frame):
 		folder_row.Add(
 			self.folder_text, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, dip(PAD_S)
 		)
-		self.folder_btn = FlatButton(self.panel, self._btn_label("folder_btn"), min_w=72)
+		folder_tip = f'{self._t("folder_label").rstrip(":")} {self._btn_label("folder_btn")}'
+		self.folder_btn = FlatButton(self.panel, folder_tip, min_w=64, icon=_IC_FOLDER)
 		self.folder_btn.Bind(wx.EVT_BUTTON, self._on_pick_folder)
 		folder_row.Add(self.folder_btn, 0, wx.ALIGN_CENTER_VERTICAL)
 		root.Add(folder_row, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, dip(PAD_M))
 
 		# 주 액션 — 다운로드(accent). Enter 실행은 _on_char_hook이 보존한다.
 		self.download_btn = FlatButton(
-			self.panel, self._btn_label("download_btn"), btn_style="accent"
+			self.panel, self._btn_label("download_btn"), btn_style="accent",
+			icon=_IC_DOWNLOAD,
 		)
 		self.download_btn.Bind(wx.EVT_BUTTON, self._on_download)
 		root.Add(
@@ -244,10 +257,18 @@ class MainFrame(wx.Frame):
 		convert_grid = wx.FlexGridSizer(2, 2, dip(PAD_XS), dip(PAD_XS))
 		convert_grid.AddGrowableCol(0)
 		convert_grid.AddGrowableCol(1)
-		self.video_file_btn = FlatButton(conv_card, self._t("video_file_btn"))
-		self.video_folder_btn = FlatButton(conv_card, self._t("video_folder_btn"))
-		self.image_file_btn = FlatButton(conv_card, self._t("image_file_btn"))
-		self.image_folder_btn = FlatButton(conv_card, self._t("image_folder_btn"))
+		self.video_file_btn = FlatButton(
+			conv_card, self._t("video_file_btn"), icon=_IC_VIDEO, badge=_BADGE_FILE
+		)
+		self.video_folder_btn = FlatButton(
+			conv_card, self._t("video_folder_btn"), icon=_IC_VIDEO, badge=_BADGE_FOLDER
+		)
+		self.image_file_btn = FlatButton(
+			conv_card, self._t("image_file_btn"), icon=_IC_IMAGE, badge=_BADGE_FILE
+		)
+		self.image_folder_btn = FlatButton(
+			conv_card, self._t("image_folder_btn"), icon=_IC_IMAGE, badge=_BADGE_FOLDER
+		)
 		self.video_file_btn.Bind(wx.EVT_BUTTON, self._on_convert_video_files)
 		self.video_folder_btn.Bind(wx.EVT_BUTTON, self._on_convert_video_folder)
 		self.image_file_btn.Bind(wx.EVT_BUTTON, self._on_convert_image_files)
@@ -284,8 +305,8 @@ class MainFrame(wx.Frame):
 	def _build_format_segment(self, parent):
 		# mp4/mp3를 2-버튼 세그먼트로 표현한다(active=accent).
 		self.fmt = "mp3" if self.config.get("format") == "mp3" else "mp4"
-		self.seg_mp4 = FlatButton(parent, self._t("format_mp4"), min_w=90)
-		self.seg_mp3 = FlatButton(parent, self._t("format_mp3"), min_w=90)
+		self.seg_mp4 = FlatButton(parent, self._t("format_mp4"), min_w=60, icon=_IC_FILM)
+		self.seg_mp3 = FlatButton(parent, self._t("format_mp3"), min_w=60, icon=_IC_AUDIO)
 		self.seg_mp4.Bind(wx.EVT_BUTTON, lambda e: self._on_format_toggle("mp4"))
 		self.seg_mp3.Bind(wx.EVT_BUTTON, lambda e: self._on_format_toggle("mp3"))
 		row = wx.BoxSizer(wx.HORIZONTAL)
@@ -412,7 +433,7 @@ class MainFrame(wx.Frame):
 
 	def _launch_worker(self, target, *args):
 		self.cancel_event = threading.Event()
-		self.download_btn.SetLabel(self._t("cancel_btn"))
+		self.download_btn.set_icon(_IC_CANCEL, self._t("cancel_btn"))
 		self._set_conversion_controls_enabled(False)
 		self._set_lang_toggle_enabled(False)
 		# 이전 실행의 실패색이 남지 않도록 시작 시 테마 기본 텍스트색으로 되돌린다.
@@ -702,7 +723,7 @@ class MainFrame(wx.Frame):
 		self.status_text.SetLabel(message)
 		self.status_text.SetForegroundColour(color if color is not None else self._fg)
 		self.status_text.Refresh()
-		self.download_btn.SetLabel(self._btn_label("download_btn"))
+		self.download_btn.set_icon(_IC_DOWNLOAD, self._btn_label("download_btn"))
 		self._set_conversion_controls_enabled(True)
 		self._set_lang_toggle_enabled(True)
 		self.cancel_event = None

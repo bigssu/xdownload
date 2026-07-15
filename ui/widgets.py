@@ -3,7 +3,7 @@
 import wx
 import wx.adv
 
-from ui.theme_tokens import PAD_M, c, dip, f
+from ui.theme_tokens import FONT_BASE, PAD_M, c, dip, f, icon_font
 
 
 class BasePanel(wx.Panel):
@@ -20,11 +20,13 @@ class FlatButton(wx.Window):
 	H = 32
 	RADIUS = 6
 
-	def __init__(self, parent, label, btn_style="secondary", min_w=80):
+	def __init__(self, parent, label, btn_style="secondary", min_w=80, icon=None, badge=None):
 		h = dip(self.H)
 		mw = dip(min_w)
 		super().__init__(parent, size=wx.Size(mw, h))
 		self.label = label
+		self.icon = icon
+		self.badge = badge
 		self.btn_style = btn_style
 		self._hover = False
 		self._cache_state = None
@@ -38,6 +40,9 @@ class FlatButton(wx.Window):
 		self.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._set_hover(True))
 		self.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._set_hover(False))
 		self.Bind(wx.EVT_LEFT_UP, self._on_click)
+		# 아이콘 버튼은 라벨을 호버 툴팁(이름+기능)으로 노출한다.
+		if label:
+			self.SetToolTip(label)
 
 	def _on_click(self, event):
 		# 커스텀 위젯이므로 표준 버튼 이벤트를 직접 발생시킨다.
@@ -51,6 +56,11 @@ class FlatButton(wx.Window):
 		self.label = label
 		self.Refresh()
 
+	def set_icon(self, icon, tooltip):
+		self.icon = icon
+		self.SetToolTip(tooltip)
+		self.Refresh()
+
 	def _set_hover(self, value):
 		if self._hover != value:
 			self._hover = value
@@ -60,7 +70,7 @@ class FlatButton(wx.Window):
 		dc = wx.AutoBufferedPaintDC(self)
 		w, h = self.GetClientSize()
 		enabled = self.IsEnabled()
-		state = (self._hover, enabled, self.btn_style, self.label, w, h)
+		state = (self._hover, enabled, self.btn_style, self.label, self.icon, self.badge, w, h)
 		if self._cache_state == state and self._cache_bmp is not None:
 			dc.DrawBitmap(self._cache_bmp, 0, 0)
 			return
@@ -88,9 +98,19 @@ class FlatButton(wx.Window):
 		border_col = c("border") if enabled else c("text_dim")
 		gc.SetPen(gc.CreatePen(wx.Pen(border_col, self._dip_1)))
 		gc.DrawRoundedRectangle(0, 0, w - 1, h - 1, self._dip_radius)
-		gc.SetFont(gc.CreateFont(f(0), text_col))
-		tw, th = gc.GetTextExtent(self.label)
-		gc.DrawText(self.label, (w - tw) / 2, (h - th) / 2)
+		if self.icon:
+			# 큰 아이콘 글리프를 중앙에, 파일/폴더 배지는 우하단 코너에 그린다.
+			gc.SetFont(gc.CreateFont(icon_font(FONT_BASE + 7), text_col))
+			iw, ih = gc.GetTextExtent(self.icon)
+			gc.DrawText(self.icon, (w - iw) / 2, (h - ih) / 2)
+			if self.badge:
+				gc.SetFont(gc.CreateFont(icon_font(FONT_BASE - 1), text_col))
+				bw, bh = gc.GetTextExtent(self.badge)
+				gc.DrawText(self.badge, w - bw - self._dip_1 * 3, h - bh - self._dip_1 * 2)
+		else:
+			gc.SetFont(gc.CreateFont(f(0), text_col))
+			tw, th = gc.GetTextExtent(self.label)
+			gc.DrawText(self.label, (w - tw) / 2, (h - th) / 2)
 		del gc
 		mdc.SelectObject(wx.NullBitmap)
 

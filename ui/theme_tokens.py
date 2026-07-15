@@ -95,3 +95,22 @@ def dip(px):
 		result = px
 	_dip_cache[px] = result
 	return result
+
+
+_icon_font_cache = {}
+
+
+def icon_font(size):
+	# Windows 내장 아이콘 폰트(Segoe MDL2 Assets) — 벡터 크리스프, 애셋 추가 0.
+	cached = _icon_font_cache.get(size)
+	if cached is not None:
+		return cached
+	font = wx.Font(
+		size,
+		wx.FONTFAMILY_DEFAULT,
+		wx.FONTSTYLE_NORMAL,
+		wx.FONTWEIGHT_NORMAL,
+		faceName="Segoe MDL2 Assets",
+	)
+	_icon_font_cache[size] = font
+	return font
