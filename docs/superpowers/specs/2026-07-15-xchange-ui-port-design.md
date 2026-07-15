@@ -92,14 +92,20 @@ Xchange 원본을 이식하되 **테마 인식**으로 확장한다.
 | copy_paper_bg | #21203A | #FFFFFF | (미사용 가능) |
 | overlay_disabled | #484848 | #C0C0C0 | (미사용 가능) |
 
-**XDownloader 전용 확장 토큰**(Xchange 상태줄이 없어 추가 — 성공/실패 메시지 색):
+**XDownloader 전용 확장 토큰**(Xchange 상태줄/2테마 지원 위해 추가):
 
 | key | dark | light | 용도 |
 |-----|------|-------|------|
-| ok | #4EC976 | #1B8A4B | 완료 상태 메시지 |
+| ok | #4EC976 | #17803F | 완료 상태 메시지 |
 | err | #F06969 | #B42D3A | 실패 상태 메시지 |
+| on_fill | #FFFFFF | #FFFFFF | 채움형 버튼(accent/danger) 라벨색 |
 
-> Xchange 원본 키는 전부 유지(미사용 키 포함) — 상류(Xchange) 동기화 용이성 우선. `ok`/`err`만 확장.
+> Xchange 원본 키는 전부 유지(미사용 키 포함) — 상류(Xchange) 동기화 용이성 우선. `ok`/`err`/`on_fill`만 확장.
+
+**대비 검증 (dataviz 방법론 — 계산, 눈대중 금지):** 전 텍스트-배경 쌍의 WCAG 2.1 대비비를 스크립트로 산출.
+- 라이트 `ok`를 #1B8A4B(4.39, AA 미달) → **#17803F(5.00, 통과)** 로 조정.
+- FlatButton accent/danger 라벨을 `c("text")` → **`on_fill`(흰색)** 으로 변경 — 라이트에서 어두운 text가 파란 accent 위 대비 실패하던 결함 교정(§5.3). 다크는 기존과 사실상 동일.
+- 다크 `text_dim`(원본 #7F7DAA, card 위 4.07)은 **Xchange 원본 그대로 유지** — dim/보조 텍스트이자 원본의 선택이므로 "그대로" 원칙 우선. bg 위에선 4.78로 통과.
 
 ### 5.3 신규 모듈 `ui/widgets.py`
 
@@ -107,6 +113,8 @@ Xchange 원본 위젯을 이식: `BasePanel`, `FlatButton`, `ToggleSwitch`, `Dar
 `SectionCard`, `Divider`. `c()`가 테마 인식이라 위젯은 자동 재스킨된다.
 
 - import 경로만 `from ui.theme_tokens import ...` 로 조정(Xchange의 `src.ui.theme_tokens` → `ui.theme_tokens`).
+- **FlatButton 적응(2테마 대비):** accent/danger 스타일 라벨색을 `c("text")` → `c("on_fill")`(흰색)로 변경.
+  라이트 테마에서 어두운 `text`가 채움 배경 위 대비 실패하는 것을 막는다. secondary/disabled는 기존대로 `c("text")`/`c("text_dim")`.
 - 그 외 동작 로직은 원본과 동일.
 
 ## 6. main_frame.py 재스킨
@@ -157,7 +165,7 @@ Xchange 원본 위젯을 이식: `BasePanel`, `FlatButton`, `ToggleSwitch`, `Dar
   렌더링 육안 확인(위젯 ghost·깜빡임 없음, 규칙 C/E 준수).
 - 빌드 후 exe 용량 실측(§8).
 
-## 11. 컨벤션 결정 (스펙 리뷰에서 확인 요망)
+## 11. 컨벤션 결정 (확정 — 사용자 승인 2026-07-15)
 
 - **들여쓰기:** 신규 2개 모듈은 XDownloader 관례(**탭**)로 이식. Xchange 원본은 4-space지만, 프로젝트 일관성
   (CLAUDE.md "기존 스타일 준수")을 위해 탭으로 재포맷. 로직은 불변.
