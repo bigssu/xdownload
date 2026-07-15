@@ -99,14 +99,21 @@ class FlatButton(wx.Window):
 		gc.SetPen(gc.CreatePen(wx.Pen(border_col, self._dip_1)))
 		gc.DrawRoundedRectangle(0, 0, w - 1, h - 1, self._dip_radius)
 		if self.icon:
-			# 큰 아이콘 글리프를 중앙에, 파일/폴더 배지는 우하단 코너에 그린다.
-			gc.SetFont(gc.CreateFont(icon_font(FONT_BASE + 7), text_col))
+			# 메인 아이콘을 크게. 배지가 있으면 메인 왼쪽에 세로 중앙으로 나란히 두고
+			# 그룹 전체를 가로 중앙 정렬한다(배지는 파일/폴더 구분 표시).
+			main_font = icon_font(FONT_BASE + 14)
+			gc.SetFont(gc.CreateFont(main_font, text_col))
 			iw, ih = gc.GetTextExtent(self.icon)
-			gc.DrawText(self.icon, (w - iw) / 2, (h - ih) / 2)
 			if self.badge:
-				gc.SetFont(gc.CreateFont(icon_font(FONT_BASE + 6), text_col))
+				gc.SetFont(gc.CreateFont(icon_font(FONT_BASE + 12), text_col))
 				bw, bh = gc.GetTextExtent(self.badge)
-				gc.DrawText(self.badge, w - bw - self._dip_1 * 3, h - bh - self._dip_1 * 2)
+				gap = self._dip_1 * 6
+				x0 = (w - (bw + gap + iw)) / 2
+				gc.DrawText(self.badge, x0, (h - bh) / 2)
+				gc.SetFont(gc.CreateFont(main_font, text_col))
+				gc.DrawText(self.icon, x0 + bw + gap, (h - ih) / 2)
+			else:
+				gc.DrawText(self.icon, (w - iw) / 2, (h - ih) / 2)
 		else:
 			gc.SetFont(gc.CreateFont(f(0), text_col))
 			tw, th = gc.GetTextExtent(self.label)

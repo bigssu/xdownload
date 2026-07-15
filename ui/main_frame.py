@@ -126,8 +126,12 @@ class MainFrame(wx.Frame):
 		self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
 		# 타이틀바 다크는 창이 실제로 표시된 뒤 재적용해야 wx가 덮어쓰지 않는다.
 		self.Bind(wx.EVT_SHOW, self._on_show)
-		# 창을 이보다 더 줄이면 컨트롤이 겹치므로 최소 크기를 고정한다.
-		self.SetMinSize((600, 620))
+		# 기본 크기는 콘텐츠(모든 버튼 + 히스토리 2~3줄)에 맞추되, 사용자가 40% 작게
+		# (=현재의 60%)까지 줄일 수 있도록 최소 크기를 둔다(DPI 반영).
+		self.panel.Layout()
+		self.SetClientSize(self.panel.GetBestSize())
+		w, h = self.GetSize()
+		self.SetMinSize((int(w * 0.6), int(h * 0.6)))
 		self.Centre()
 
 	def _t(self, key):
@@ -292,6 +296,7 @@ class MainFrame(wx.Frame):
 		# 히스토리 카드
 		hist_card = SectionCard(self.panel, self._t("history_label"))
 		self.history_list = wx.ListBox(hist_card)
+		self.history_list.SetMinSize((-1, dip(52)))
 		self.history_list.Bind(wx.EVT_LISTBOX_DCLICK, self._on_history_open)
 		hist_card.body.Add(self.history_list, 1, wx.EXPAND)
 		root.Add(hist_card, 1, wx.EXPAND | wx.ALL, dip(PAD_M))
