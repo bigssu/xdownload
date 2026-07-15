@@ -1,113 +1,96 @@
 ---
 name: XDownloader
-description: wxPython 4.2 기반 YouTube 다운로더 데스크톱 앱의 디자인 토큰 (Windows 네이티브)
-colors:
-  primary: "#000000"
-  surface: "#F0F0F0"
-  surface-input: "#FFFFFF"
-  disabled: "#6D6D6D"
-  accent: "#0078D7"
-  success: "#008000"
-  error: "#B40000"
-typography:
-  body:
-    fontFamily: "맑은 고딕"
-    fontSize: 12px
-  button-primary:
-    fontFamily: "맑은 고딕"
-    fontSize: 12px
-    fontWeight: 700
+description: wxPython 4.2 기반 YouTube 다운로더 데스크톱 앱의 디자인 시스템 (XChange 파생, 다크/라이트)
+tokens:
+  access: 'c("key") / f(delta, bold) / dip(px) / PAD_XS·PAD_S·PAD_M'
+  hardcoding: forbidden
 spacing:
-  tight: 4px
-  inner: 6px
-  section: 12px
-components:
-  url-input:
-    backgroundColor: "{colors.surface-input}"
-    textColor: "{colors.primary}"
-  status-success:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.success}"
-  status-error:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.error}"
-  status-disabled:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.disabled}"
-  button-download:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.primary}"
-    typography: "{typography.button-primary}"
-    height: 40px
+  PAD_XS: 4
+  PAD_S: 8
+  PAD_M: 14
+typography:
+  base: 'Segoe UI 10pt (FONT_BASE), f(delta, bold)로 가감'
+colors_dark:
+  bg: "#13121F"
+  card: "#21203A"
+  surface: "#2F2E50"
+  border_card: "#302F52"
+  accent: "#0078D4"
+  text: "#E6E4FF"
+  text_dim: "#7F7DAA"
+  ok: "#4EC976"
+  err: "#F06969"
+  on_fill: "#FFFFFF"
+colors_light:
+  bg: "#F4F3FA"
+  card: "#FFFFFF"
+  surface: "#EAE8F5"
+  border_card: "#DAD7EC"
+  accent: "#0078D4"
+  text: "#1E1D2E"
+  text_dim: "#6D6B8C"
+  ok: "#17803F"
+  err: "#B42D3A"
+  on_fill: "#FFFFFF"
 ---
 
 ## Overview
 
-XDownloader는 wxPython 네이티브 위젯으로 만든 Windows 데스크톱 유틸리티다.
-독자적 브랜드 팔레트를 강요하지 않고 **OS 시스템 색을 그대로 따르는 것**을 원칙으로
-한다. 커스텀 색은 "성공/실패" 같은 의미 전달이 꼭 필요한 곳에만 최소한으로 쓴다.
-따라서 이 문서의 토큰 대부분은 Windows 시스템 색의 실제 값을 기록한 것이다.
+XDownloader의 UI는 자매 프로젝트 **XChange의 디자인 시스템을 이식**한 것이다.
+딥 퍼플-틴트 다크 카드 미학 + Segoe UI 타이포 + 라운드 커스텀 위젯을 쓰며,
+라이트/다크 두 테마를 모두 지원한다(다크=XChange 원본 값, 라이트=파생 값).
 
-라이트/다크 테마와 한국어/영어 언어는 창 상단 우측 토글(`한`/`En`, 다크 아이콘
-`☾`/`☀`)에서 즉시 전환하며 config에 저장된다.
-라이트 테마는 위 OS 시스템 색을 그대로 쓰고, 다크 테마만 아래 고정 팔레트를 적용한다.
-테마 미설정(최초 실행) 시에는 OS 다크모드 설정을 따라 초기값을 정한다.
+**방식(8원칙, 출처: XChange `UI_UX_RULES`):** 색·폰트·px 하드코딩 금지 —
+전부 디자인 토큰(`c()/f()/dip()/PAD_*`)으로만 접근한다. 레이아웃은 Sizer 전용,
+커스텀 위젯은 `GraphicsContext`로 직접 그린다. 관련 모듈: `ui/theme_tokens.py`(토큰),
+`ui/widgets.py`(공용 위젯).
+
+> 과거 "OS 시스템 색을 따른다" 원칙(v0.67 이하)은 이 토큰 시스템으로 대체되었다.
+
+## Design Tokens (`ui/theme_tokens.py`)
+
+- **색:** `C_DARK`/`C_LIGHT` 딕셔너리(동일 키 집합) → `c("key")`가 현재 테마 색을 반환.
+  `set_theme("dark"|"light")`로 전환(색 캐시 자동 무효화). 대비는 WCAG AA로 검증됨
+  (`tests/test_theme_tokens.py`가 회귀로 고정).
+- **폰트:** `FONT_BASE = 10`(Segoe UI). `f(delta, bold)`로 크기·굵기 가감.
+- **DPI:** 모든 px는 `dip(px)` 통과(`wx.Window.FromDIP`).
+- **아이콘 폰트:** `icon_font(size)` — Windows 내장 **Segoe MDL2 Assets**(벡터, 애셋 추가 0).
+- **간격:** `PAD_XS=4`(밀접), `PAD_S=8`(내부), `PAD_M=14`(섹션/거터).
 
 ## Colors
 
-- **primary (#000000):** 기본 텍스트색(시스템 WINDOWTEXT). 라벨·입력·버튼 글자.
-- **surface (#F0F0F0):** 패널 배경(시스템 BTNFACE). 라벨·상태줄·버튼이 올라가는 면.
-- **surface-input (#FFFFFF):** 텍스트 입력창 배경(시스템 WINDOW).
-- **disabled (#6D6D6D):** 비활성 텍스트(시스템 GRAYTEXT).
-- **accent (#0078D7):** 기본 버튼(다운로드) 포커스 강조 테두리(시스템 HIGHLIGHT). OS가 그린다.
-- **success (#008000):** 다운로드 완료 상태 메시지. `core` 코드의 `wx.Colour(0,128,0)`.
-- **error (#B40000):** 실패/오류 상태 메시지. `wx.Colour(180,0,0)`.
-
-### 다크 테마 팔레트 (다크 모드에서만 적용)
-
-- **bg (#1E1E1E):** 패널 배경. `wx.Colour(30,30,30)`.
-- **input-bg (#2D2D30):** 입력창·리스트·드롭다운 배경. `wx.Colour(45,45,48)`.
-- **fg (#DCDCDC):** 기본 텍스트색. `wx.Colour(220,220,220)`.
-- **success-dark (#4EC976):** 다크 배경용 밝은 성공색. `wx.Colour(78,201,118)`.
-- **error-dark (#F06969):** 다크 배경용 밝은 실패색. `wx.Colour(240,105,105)`.
-
-> wxWidgets 3.2엔 네이티브 다크 API가 없어, 위젯 색칠만으로는 타이틀바·스크롤바·
-> 드롭다운·게이지가 흰색으로 남는다. 이를 다음으로 보강해 **완전 다크**를 구현한다:
-> - `core/winapi.py` — Win32(uxtheme/dwmapi) 직접 호출: 앱 다크모드(`SetPreferredAppMode`),
->   타이틀바(`DwmSetWindowAttribute` + `EVT_SHOW` 재적용·NC 리드로우), 스크롤바·드롭다운
->   (`SetWindowTheme` `DarkMode_Explorer`/`DarkMode_CFD`).
-> - 진행바는 네이티브 게이지 대신 직접 그리는 `_ProgressBar`(wx.Panel)로 대체.
-> - 포맷은 RadioBox 대신 RadioButton을 써 항목 텍스트 색이 다크에서도 보이게 함.
+라이트/다크 모두 XChange 토큰 구조를 공유한다. accent(#0078D4)·danger는 두 테마 공용,
+표면/텍스트는 테마별로 반전. 상태 텍스트용 `ok`/`err`, 채움형 버튼 라벨용 `on_fill`(흰색)은
+XDownloader 확장 토큰이다. 전체 표는 frontmatter 참조.
 
 ## Typography
 
-기본 폰트는 시스템 GUI 폰트인 **맑은 고딕 9pt**(약 12px)다. 별도 폰트를 지정하지
-않는다. 주 액션인 "다운로드" 버튼을 굵게(700) 처리해 1차 위계를 주고, 섹션 헤더
-라벨("YouTube 링크", "최근 다운로드")도 볼드로 본문과 구분해 2차 위계를 둔다.
-크기는 키우지 않는다 — 네이티브 데스크톱 관례상 굵기만으로 충분하다.
+기본 **Segoe UI 10pt**. 섹션 헤더(`SectionCard` 제목)와 강조는 `f(0, bold=True)`.
+네이티브 데스크톱 관례상 크기보다 굵기·색으로 위계를 준다.
 
-## Layout
+## Components (`ui/widgets.py`)
 
-간격은 세 단계 리듬을 따른다.
+- **SectionCard:** 라운드 테두리 카드(헤더 + `body` sizer). 포맷·화질·로컬 파일 변환·히스토리 섹션.
+- **FlatButton:** 커스텀 페인트 버튼(비트맵 캐시). `btn_style`=accent/secondary/danger.
+  **아이콘 버튼** — 라벨 대신 Segoe MDL2 글리프를 그리고, 라벨은 **호버 툴팁(이름+기능)** 으로 노출.
+  `badge`가 있으면 메인 아이콘 왼쪽에 파일/폴더 구분 배지를 나란히 그린다. accent/danger 라벨색은 `on_fill`.
+- **DarkChoice:** 다크 테마 드롭다운(`OwnerDrawnComboBox`). 화질 선택.
+- **ToggleSwitch:** on/off 스위치(현재 미사용, 이식 완비).
+- **_ProgressBar:** 커스텀 진행바(네이티브 게이지의 다크 트랙 문제 회피). 색은 `c("surface")`/`c("accent")`.
 
-- **section (12px):** 섹션 사이, 좌우 거터의 기본 간격.
-- **inner (6px):** 그룹 박스 내부 컨트롤 여백, 라벨-필드 가로 간격.
-- **tight (4px):** 게이지와 상태줄처럼 밀접한 요소 사이.
+### 아이콘(Segoe MDL2 Assets)
 
-창 최소 크기는 560×520px로 고정해 컨트롤이 겹치지 않게 한다. 입력창 높이는 90px,
-다운로드 버튼 높이는 40px다.
+다운로드↓(E896)/취소✕(E711), 폴더 변경(ED25), 포맷 MP4 필름(E8B2)/MP3 음표(E8D6),
+변환 = 동영상(E714)/이미지(E91B) + 파일(E7C3)·폴더(ED25) 배지. 모든 버튼에 호버 툴팁.
 
-## Components
+## Theme / Language / Window
 
-- **url-input:** 흰 배경(surface-input)에 검정 텍스트. 멀티라인 링크 입력.
-- **status-success / status-error / status-disabled:** 패널 배경(surface) 위에 각각
-  성공(초록)·실패(빨강)·비활성(회색) 텍스트. 결과를 색으로도 구분한다.
-- **button-download:** 패널 배경에 검정 굵은 글자, 높이 40px. 기본 버튼으로 지정되어
-  포커스 시 accent 테두리가 표시되고 Enter로 실행된다.
+- **테마 토글(☾/☀):** `set_theme` + 패널 재생성(입력·선택값 보존). 다크↔라이트 즉시 전환.
+- **언어 토글(한/En):** ko/en, 패널 재생성. 문자열은 `core/i18n.py`.
+- **창 크기:** 기본은 콘텐츠(모든 버튼 + 히스토리 2~3줄)에 맞춰 열고, 사용자가 기본의
+  60%(=40% 작게)까지 축소 가능.
 
 ## Localization
 
-UI 문자열은 `core/i18n.py`의 `{lang: {key: text}}` 테이블에 모으고 `tr(lang, key)`로
-조회한다. 한국어(ko)·영어(en)를 지원하며, 누락 키는 한국어 → 키 자체로 폴백해 번역
-누락이 크래시가 되지 않게 한다. 언어 전환은 `wx.RadioButton` 등 위젯의 런타임 라벨
-변경 제약 때문에 패널을 재생성(입력값·선택값 보존)해 다시 그린다.
+`core/i18n.py`의 `{lang: {key: text}}` 테이블 + `tr(lang, key)`. 누락 키는 한국어 → 키 자체로 폴백.
+아이콘 버튼의 툴팁도 이 라벨을 재사용한다.
