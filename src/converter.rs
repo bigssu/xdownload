@@ -238,7 +238,7 @@ pub fn build_args(source: &Path, dest: &Path, target: Target, encoder: Encoder) 
         // -update 1: the output name is taken literally (a `%03d` in it is not a pattern).
         Target::Image(ImageTarget::Jpg) => args.extend(strings(&["-frames:v", "1", "-update", "1", "-vf", "format=rgb24", "-q:v", "2"])),
         Target::Image(ImageTarget::Png) => args.extend(strings(&["-frames:v", "1", "-update", "1"])),
-        Target::Image(ImageTarget::Webp) => args.extend(strings(&["-frames:v", "1", "-c:v", "libwebp", "-q:v", "90"])),
+        Target::Image(ImageTarget::Webp) => args.extend(strings(&["-frames:v", "1", "-update", "1", "-c:v", "libwebp", "-q:v", "90"])),
     }
     args.push(text(dest));
     args
@@ -417,7 +417,8 @@ mod tests {
         assert!(after(&gif, "-vf").contains("palettegen") && after(&gif, "-loop") == "0");
         let jpg = args(JPG, "o.jpg");
         assert_eq!((after(&jpg, "-vf"), after(&jpg, "-q:v"), after(&jpg, "-frames:v")), ("format=rgb24", "2", "1"));
-        assert_eq!(after(&args(Target::Image(ImageTarget::Webp), "o.webp"), "-c:v"), "libwebp");
+        let webp = args(Target::Image(ImageTarget::Webp), "o.webp");
+        assert_eq!((after(&webp, "-c:v"), after(&webp, "-update")), ("libwebp", "1"));
         let png = args(Target::Image(ImageTarget::Png), "o.png");
         assert_eq!((after(&png, "-frames:v"), after(&png, "-update"), png.last().unwrap().as_str()), ("1", "1", "o.png"));
         assert_eq!(after(&jpg, "-update"), "1");

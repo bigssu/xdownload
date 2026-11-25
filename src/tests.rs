@@ -200,8 +200,10 @@ mod live {
         let mut rich = options(downloader::Format::Mp4, &dir);
         (rich.subs, rich.embed_info) = (true, true);
         queue.add(Work::Download { url: LINKS[0].into(), options: rich });
-        queue.add(Work::Download { url: LINKS[0].into(), options: options(downloader::Format::M4a, &dir) });
-        queue.add(Work::Download { url: LINKS[0].into(), options: options(downloader::Format::Mp3, &dir) });
+        // Different links: one link is only ever downloaded once at a time.
+        queue.add(Work::Download { url: LINKS[2].into(), options: options(downloader::Format::M4a, &dir) });
+        queue.add(Work::Download { url: LINKS[1].into(), options: options(downloader::Format::Mp3, &dir) });
+        assert!(queue.add(Work::Download { url: LINKS[0].into(), options: options(downloader::Format::Mp3, &dir) }).is_none());
         queue.add(Work::Download { url: "https://www.youtube.com/watch?v=xxxxxxxxxxx".into(), options: options(downloader::Format::Mp3, &dir) });
         let files = run_queue(&mut queue, Limits::new(3, false), false);
         assert_eq!((queue.count(State::Done), queue.count(State::Failed)), (3, 1), "a bad link fails alone");
