@@ -31,10 +31,12 @@ fn adding_downloads_queues_each_link_once_with_the_chosen_options() {
     app.s.format = 1;
     app.urls = "https://youtu.be/a\nhttps://youtu.be/c".into();
     app.add_downloads();
-    assert_eq!(app.queue.items.len(), 4, "the same link with other options is different work");
+    assert_eq!(app.queue.items.len(), 3, "a link already in the queue is not added again, whatever the options");
+    let Work::Download { options, .. } = &app.queue.items[2].work else { panic!("a download was queued") };
+    assert_eq!(options.format, downloader::Format::Mp3);
     app.urls = "https://youtu.be/c".into();
     app.add_downloads();
-    assert_eq!((app.queue.items.len(), app.notice.0.key), (4, "already"));
+    assert_eq!((app.queue.items.len(), app.notice.0.key), (3, "already"));
 }
 
 #[test]

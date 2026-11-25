@@ -26,6 +26,10 @@ pub struct Job {
 }
 
 impl Job {
+    pub const fn new() -> Self {
+        Self { cancel: AtomicBool::new(false), child: Mutex::new(None) }
+    }
+
     pub fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::SeqCst)
     }

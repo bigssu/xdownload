@@ -130,33 +130,28 @@ fn collect_folder(folder: &Path, target: Target, recursive: bool, files: &mut Ve
     }
 }
 
-/// `path`, or `name-2.ext`, `name-3.ext`, ... when it already exists.
-fn unique_path(path: PathBuf) -> std::io::Result<PathBuf> {
-    if !path.exists() {
-        return Ok(path);
-    }
-    let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
-    (2..10000).map(|n| path.with_file_name(format!("{}-{n}.{ext}", stem(&path)))).find(|candidate| !candidate.exists())
-        .ok_or_else(|| std::io::Error::other(format!("no free output name for {}", path.display())))
-}
-
-/// Where the converted file goes: next to the source, never over an existing file.
-pub fn output_path(source: &Path, target: Target) -> std::io::Result<PathBuf> {
+/// The names a conversion may write to, in order of preference: next to the source as
+/// `name.ext` (`name_h264_720p.mp4` when the source already is an MP4), then `-2`, `-3`, ...
+fn output_candidates(source: &Path, target: Target) -> impl Iterator<Item = PathBuf> {
     let ext = target.extension();
-    if extension(source).as_deref() == Some(ext) {
-        return unique_path(source.with_file_name(format!("{}{}.{ext}", stem(source), target.mp4_suffix())));
-    }
-    unique_path(source.with_extension(ext))
+    let suffix = if extension(source).as_deref() == Some(ext) { target.mp4_suffix() } else { String::new() };
+    let base = format!("{}{suffix}", stem(source));
+    let folder = source.to_path_buf();
+    std::iter::once(String::new()).chain((2..10000).map(|n| format!("-{n}"))).map(move |n| folder.with_file_name(format!("{base}{n}.{ext}")))
 }
 
-/// Picks the output path and creates the (empty) file at once, so conversions running side
-/// by side — `photo.png` and `photo.webp` both going to `photo.jpg` — never share a name.
+/// Takes the first free output name by creating the (empty) file. Creation fails when the
+/// file exists, so conversions running side by side — in this window or another — never
+/// share a name, and an existing file is never overwritten.
 fn reserve_output(source: &Path, target: Target) -> std::io::Result<PathBuf> {
-    static RESERVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = RESERVING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let dest = output_path(source, target)?;
-    std::fs::File::create(&dest)?;
-    Ok(dest)
+    for candidate in output_candidates(source, target) {
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(_) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::other(format!("no free output name for {}", source.display())))
 }
 
 /// H.264 encoder used for MP4 output.
@@ -240,8 +235,9 @@ pub fn build_args(source: &Path, dest: &Path, target: Target, encoder: Encoder) 
         Target::Video { target: VideoTarget::Gif, .. } => args.extend(strings(&[
             "-an", "-vf", "fps=12,scale=480:-2:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse", "-loop", "0",
         ])),
-        Target::Image(ImageTarget::Jpg) => args.extend(strings(&["-frames:v", "1", "-vf", "format=rgb24", "-q:v", "2"])),
-        Target::Image(ImageTarget::Png) => args.extend(strings(&["-frames:v", "1"])),
+        // -update 1: the output name is taken literally (a `%03d` in it is not a pattern).
+        Target::Image(ImageTarget::Jpg) => args.extend(strings(&["-frames:v", "1", "-update", "1", "-vf", "format=rgb24", "-q:v", "2"])),
+        Target::Image(ImageTarget::Png) => args.extend(strings(&["-frames:v", "1", "-update", "1"])),
         Target::Image(ImageTarget::Webp) => args.extend(strings(&["-frames:v", "1", "-c:v", "libwebp", "-q:v", "90"])),
     }
     args.push(text(dest));
@@ -301,18 +297,20 @@ fn with_cpu_fallback(preferred: Encoder, job: &Job, mut encode: impl FnMut(Encod
 pub fn convert(source: &Path, target: Target, ffmpeg: &str, encoder: Encoder, job: &Job, on_progress: &mut dyn FnMut(u8)) -> std::io::Result<Converted> {
     let dest = reserve_output(source, target)?;
     let mp4 = matches!(target, Target::Video { target: VideoTarget::Mp4, .. });
-    let (code, encoder) = with_cpu_fallback(if mp4 { encoder } else { Encoder::Cpu }, job, |encoder| {
+    let result = with_cpu_fallback(if mp4 { encoder } else { Encoder::Cpu }, job, |encoder| {
         let mut progress = Progress::default();
         proc::run(ffmpeg, &build_args(source, &dest, target, encoder), job, |line| {
             if let Some(percent) = progress.feed(line) {
                 on_progress(percent);
             }
         })
-    })?;
-    // A failed or cancelled run leaves a broken output that would look like a finished file.
-    if code != 0 {
+    });
+    // Anything but success (failure, cancel, ffmpeg that could not start) leaves the reserved
+    // or half-written file behind; it would look like a finished conversion.
+    if !matches!(result, Ok((0, _))) {
         let _ = std::fs::remove_file(&dest);
     }
+    let (code, encoder) = result?;
     Ok(Converted { code, dest, encoder })
 }
 
@@ -369,7 +367,8 @@ mod tests {
     #[test]
     fn output_paths_are_unique_and_keep_originals() {
         let root = temp("outputs", &["clip.mp4", "clip_h264_1080p.mp4", "photo.jpeg", "photo.jpg", "movie.mkv"]);
-        let name = |source: &str, target| names(&[output_path(&root.join(source), target).unwrap()])[0].clone();
+        // The first name that does not exist yet.
+        let name = |source: &str, target| names(&[output_candidates(&root.join(source), target).find(|path| !path.exists()).unwrap()])[0].clone();
         assert_eq!(name("clip.mp4", MP4), "clip_h264_1080p-2.mp4");
         assert_eq!(name("clip.mp4", Target::Video { target: VideoTarget::Mp4, height: 720, quality: 0 }), "clip_h264_720p.mp4");
         assert_eq!(name("clip.mp4", Target::Video { target: VideoTarget::Mp4, height: 0, quality: 0 }), "clip_h264_src.mp4");
@@ -381,7 +380,11 @@ mod tests {
         // Reserving creates the file, so the next conversion with the same name moves on.
         let first = reserve_output(&root.join("movie.mkv"), MP4).unwrap();
         let second = reserve_output(&root.join("movie.mkv"), MP4).unwrap();
-        assert_eq!(names(&[first, second]), ["movie.mp4", "movie-2.mp4"]);
+        assert_eq!(names(&[first.clone(), second]), ["movie.mp4", "movie-2.mp4"]);
+        // A conversion that cannot even start gives its reserved name back.
+        std::fs::remove_file(&first).unwrap();
+        assert!(convert(&root.join("movie.mkv"), MP4, "xdownload2-no-such-ffmpeg", Encoder::Cpu, &Job::default(), &mut |_| {}).is_err());
+        assert!(!first.exists(), "no empty output is left behind");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -416,7 +419,8 @@ mod tests {
         assert_eq!((after(&jpg, "-vf"), after(&jpg, "-q:v"), after(&jpg, "-frames:v")), ("format=rgb24", "2", "1"));
         assert_eq!(after(&args(Target::Image(ImageTarget::Webp), "o.webp"), "-c:v"), "libwebp");
         let png = args(Target::Image(ImageTarget::Png), "o.png");
-        assert_eq!((after(&png, "-frames:v"), png.last().unwrap().as_str()), ("1", "o.png"));
+        assert_eq!((after(&png, "-frames:v"), after(&png, "-update"), png.last().unwrap().as_str()), ("1", "1", "o.png"));
+        assert_eq!(after(&jpg, "-update"), "1");
     }
 
     #[test]

@@ -351,7 +351,9 @@ impl App {
 
     /// Starts waiting items within the limits and notices when the queue runs dry.
     fn schedule(&mut self, ctx: &egui::Context) {
-        let use_gpu = self.s.gpu && self.encoder != Some(converter::Encoder::Cpu);
+        // Two videos at once only when a hardware encoder is known to work; until then (not
+        // probed yet, or none found) conversions may land on the CPU, one at a time.
+        let use_gpu = self.s.gpu && self.encoder.is_some_and(|encoder| encoder != converter::Encoder::Cpu);
         for (id, work, job) in self.queue.start_next(Limits::new(self.s.parallel(), use_gpu)) {
             let (tx, ctx, use_gpu) = (self.tx.clone(), ctx.clone(), self.s.gpu);
             std::thread::spawn(move || {
@@ -510,6 +512,7 @@ impl eframe::App for App {
         // Closing the window must not leave yt-dlp / ffmpeg running.
         if ctx.input(|i| i.viewport().close_requested()) {
             self.queue.cancel_all_blocking();
+            downloader::UPDATE_JOB.cancel();
         }
         self.paste_on_focus(ctx);
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|file| file.path.clone()).collect());

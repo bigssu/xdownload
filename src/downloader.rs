@@ -149,13 +149,16 @@ pub fn update(ytdlp: &str, job: &Job) {
 /// Whether yt-dlp was already updated in this run of the app.
 static UPDATED: Mutex<bool> = Mutex::new(false);
 
+/// The self-update runs under this job, not under the item that asked for it: cancelling
+/// that item must not kill an update others wait for. The app cancels it when it closes.
+pub static UPDATE_JOB: Job = Job::new();
+
 /// Updates yt-dlp at most once per run. Downloads failing at the same time queue up here:
 /// the first one updates, the others find it done and just retry.
 pub fn update_once(ytdlp: &str, job: &Job) {
     let mut updated = UPDATED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if !*updated && !job.cancelled() {
-        // Its own job: cancelling the item that asked must not kill an update others wait for.
-        update(ytdlp, &Job::default());
+        update(ytdlp, &UPDATE_JOB);
         *updated = true;
     }
 }

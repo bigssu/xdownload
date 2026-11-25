@@ -175,9 +175,15 @@ impl Queue {
         queue
     }
 
-    /// Adds work to the end. The same work already waiting or running is not added twice.
+    /// Adds work to the end. Work already waiting or running is not added twice, and neither
+    /// is a second download of the same link with other options: both yt-dlp runs would write
+    /// the same intermediate and final file names.
     pub fn add(&mut self, work: Work) -> Option<u64> {
-        if self.items.iter().any(|item| !item.finished() && item.work == work) {
+        let same = |other: &Work| match (other, &work) {
+            (Work::Download { url: a, .. }, Work::Download { url: b, .. }) => a == b,
+            _ => *other == work,
+        };
+        if self.items.iter().any(|item| !item.finished() && same(&item.work)) {
             return None;
         }
         self.next_id += 1;
@@ -416,6 +422,9 @@ mod tests {
             queue.add(image(&format!("p{n}.png")));
         }
         assert_eq!(queue.add(download("b")), None, "the same link is not queued twice while active");
+        let Work::Download { url, mut options } = download("b") else { unreachable!() };
+        options.height = 1080;
+        assert_eq!(queue.add(Work::Download { url, options }), None, "not even with other options: the file names would clash");
         let started: Vec<u64> = queue.start_next(LIMITS).into_iter().map(|(id, _, _)| id).collect();
         assert_eq!(started, [ids[0], ids[1], videos[0], 6, 7, 8]);
         assert!(queue.start_next(LIMITS).is_empty(), "every limit is used up");
