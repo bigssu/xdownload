@@ -91,6 +91,12 @@ fn worker_messages_reach_the_queue_and_mark_a_finished_download() {
 }
 
 #[test]
+fn a_file_name_with_a_comma_is_quoted_for_explorer() {
+    // Video titles often carry commas; unquoted, Explorer opened an unrelated folder.
+    assert_eq!(select_argument(Path::new(r"C:\Users\me\Downloads\ship, one line #Shorts.mp4")), r#"/select,"C:\Users\me\Downloads\ship, one line #Shorts.mp4""#);
+}
+
+#[test]
 fn settings_choices_map_to_targets() {
     let mut app = app();
     (app.s.format, app.s.video_target, app.s.video_height, app.s.video_quality, app.s.image_target) = (9, 2, 720, 2, 1);

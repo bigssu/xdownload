@@ -4,11 +4,11 @@ use egui_phosphor::regular as ph;
 
 /// Every icon name the app uses.
 #[cfg(test)]
-pub const NAMES: [&str; 37] = [
+pub const NAMES: [&str; 39] = [
     "close", "min", "max", "download", "cancel", "folder", "file", "film", "music", "video", "image", "logo",
     "retry", "trash", "done", "failed", "waiting", "stopped", "sweep", "open", "update",
     "convert", "history", "settings", "subs", "info", "playlist", "best", "running", "quality", "balanced", "small",
-    "source", "subfolders", "gpu", "cpu", "files",
+    "source", "subfolders", "gpu", "cpu", "files", "paste", "parallel",
 ];
 
 pub fn glyph(name: &str) -> Option<&'static str> {
@@ -48,6 +48,8 @@ pub fn glyph(name: &str) -> Option<&'static str> {
         "gpu" => ph::GRAPHICS_CARD,
         "cpu" => ph::CPU,
         "files" => ph::FILES,
+        "paste" => ph::CLIPBOARD_TEXT,
+        "parallel" => ph::STACK,
         _ => return None,
     })
 }

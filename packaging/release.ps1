@@ -28,15 +28,19 @@ if (-not (Select-String -Path assets\xdownload2.manifest -Pattern "version=`"$([
     throw "assets\xdownload2.manifest does not carry version $version.0"
 }
 
-# A stale exe must never be shipped after a failed build.
+# A stale exe must never be shipped after a failed build. The target is fixed in
+# .cargo\config.toml; target\release is where older builds used to land.
 $target = 'target\x86_64-pc-windows-msvc\release\xdownload2.exe'
-Remove-Item $target -ErrorAction SilentlyContinue
-Remove-Item dist -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item $target, 'target\release\xdownload2.exe', 'target\debug\xdownload2.exe' -ErrorAction SilentlyContinue
+if (Test-Path dist) {
+    try { Remove-Item dist -Recurse -Force }
+    catch { throw 'dist\ cannot be replaced: close the running xdownload2.exe (it was started from dist\) and run this again' }
+}
 
 if (-not $SkipTests) {
-    Invoke-Checked 'cargo test' { cargo test --release --target x86_64-pc-windows-msvc }
+    Invoke-Checked 'cargo test' { cargo test --release }
 }
-Invoke-Checked 'cargo build' { cargo build --release --target x86_64-pc-windows-msvc }
+Invoke-Checked 'cargo build' { cargo build --release }
 if (-not (Test-Path $target)) { throw "build produced no $target" }
 
 New-Item -ItemType Directory dist | Out-Null

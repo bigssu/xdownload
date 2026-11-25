@@ -41,6 +41,7 @@
 
 ## 출시 순서
 
+0. 실행 중인 xdownload2.exe 를 닫는다(`dist\` 의 exe 를 쓰는 중이면 스크립트가 멈춘다).
 1. `Cargo.toml` 과 `assets/xdownload2.manifest` 의 버전을 올리고 `CHANGELOG.md` 에 항목을 쓴다.
 2. `pwsh packaging\release.ps1`
 3. `pwsh packaging\ui_smoke.ps1` (창이 잠깐 뜬다)

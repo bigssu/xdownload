@@ -140,25 +140,6 @@ pub fn icon_button_sized(ui: &mut Ui, icon: &str, tooltip: &str, side: f32) -> R
     response.tip(tooltip)
 }
 
-/// A switch followed by its label; clicking either flips it.
-pub fn toggle(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(13.0), TEXT);
-    let (r, mut response) = ui.allocate_exact_size(vec2(42.0 + 8.0 + galley.size().x, 24.0), Sense::click());
-    if response.clicked() {
-        *value = !*value;
-        response.mark_changed();
-    }
-    let (on, enabled) = (*value, ui.is_enabled());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, label));
-    let t = ui.ctx().animate_bool_with_time(response.id.with("toggle"), *value, 0.28);
-    let track = Rect::from_min_size(r.min, vec2(42.0, 24.0));
-    ui.painter().rect_filled(track, 12, TOGGLE_OFF);
-    ui.painter().rect_filled(track, 12, ACCENT.gamma_multiply(t));
-    ui.painter().circle_filled(pos2(track.left() + 12.0 + 18.0 * spring(t), track.center().y), 9.0, TEXT);
-    ui.painter().galley(pos2(track.right() + 8.0, r.center().y - galley.size().y / 2.0), galley, TEXT);
-    response
-}
-
 /// A track of text options with a sliding light pill under the chosen one.
 pub fn segmented(ui: &mut Ui, id_source: impl Hash, labels: &[&str], selected: &mut usize, width: f32) -> Response {
     let items: Vec<(&str, &str)> = labels.iter().map(|label| (*label, "")).collect();
@@ -358,20 +339,6 @@ mod tests {
             changes += usize::from(response.changed());
         });
         assert_eq!((selected, changes), (2, 1));
-    }
-
-    #[test]
-    fn toggle_flips_on_click_and_reports_the_change() {
-        let ctx = egui::Context::default();
-        let rect = std::cell::Cell::new(Rect::NOTHING);
-        let (mut value, mut changes) = (false, 0);
-        frames(&ctx, 4, || rect.get().center(), |ui| {
-            let response = toggle(ui, &mut value, "Subtitles");
-            rect.set(response.rect);
-            changes += usize::from(response.changed());
-        });
-        assert_eq!((value, changes), (true, 1));
-        assert!(rect.get().width() > 60.0, "the label is part of the click target");
     }
 
     #[test]

@@ -391,34 +391,36 @@ impl App {
         }
     }
 
-    /// Settings are read once and rarely, so here each switch keeps its sentence.
     fn settings_tab(&mut self, ui: &mut egui::Ui) {
-        ui.spacing_mut().item_spacing.y = 16.0;
+        ui.spacing_mut().item_spacing.y = 14.0;
         ui.horizontal(|ui| {
+            marker(ui, "parallel", tr("set_parallel"));
             let mut parallel = self.s.parallel() - 1;
-            if w::segmented(ui, "parallel", &["1", "2", "3", "4", "5"], &mut parallel, 180.0).changed() {
+            let cells = ["1", "2", "3", "4", "5"].map(|count| (count, tr("set_parallel")));
+            if w::segmented_tips(ui, "parallel", &cells, &mut parallel, 180.0).changed() {
                 self.s.parallel = parallel as u8 + 1;
             }
-            ui.label(tr("set_parallel"));
         });
         ui.horizontal(|ui| {
-            w::toggle(ui, &mut self.s.gpu, tr("set_gpu")).tip(tr("set_gpu_tip"));
-            if let (true, Some(encoder)) = (self.s.gpu, self.encoder) {
-                ui.label(RichText::new(encoder.label()).size(12.0).color(MUTED));
+            w::chip(ui, &mut self.s.gpu, "gpu", &format!("{} — {}", tr("set_gpu"), tr("set_gpu_tip")));
+            w::chip(ui, &mut self.s.auto_paste, "paste", tr("set_autopaste"));
+            w::chip(ui, &mut self.s.open_when_done, "open", tr("set_open_done"));
+            if w::action_icon(ui, "folder", &format!("{} — {}", tr("set_data"), tr("set_data_tip")), Kind::Ghost, vec2(44.0, 34.0)).clicked() {
+                if let Some(dir) = settings::app_dir() {
+                    let _ = std::fs::create_dir_all(&dir);
+                    open(&dir.to_string_lossy());
+                }
             }
         });
-        w::toggle(ui, &mut self.s.auto_paste, tr("set_autopaste"));
-        w::toggle(ui, &mut self.s.open_when_done, tr("set_open_done"));
-        if w::action_button(ui, "folder", tr("set_data"), Kind::Ghost, vec2(240.0, 38.0)).tip(tr("set_data_tip")).clicked() {
-            if let Some(dir) = settings::app_dir() {
-                let _ = std::fs::create_dir_all(&dir);
-                open(&dir.to_string_lossy());
-            }
-        }
-        ui.label(RichText::new(format!("Xdownload2 {}", build_version())).size(12.0).color(MUTED));
+        // Names and numbers stay as text: the encoder found, the version, a newer version.
+        let encoder = match (self.s.gpu, self.encoder) {
+            (true, Some(encoder)) => format!("   {}", encoder.label()),
+            _ => String::new(),
+        };
+        ui.label(RichText::new(format!("Xdownload2 {}{encoder}", build_version())).size(12.0).color(MUTED));
         if let Some(release) = self.release.clone() {
-            let label = i18n::fill("update_available", &[("v", &release.version)]);
-            if w::action_button(ui, "update", &label, Kind::Primary, vec2(240.0, 38.0)).clicked() {
+            let tip = i18n::fill("update_available", &[("v", &release.version)]);
+            if w::action_button(ui, "update", &release.version, Kind::Primary, vec2(120.0, 38.0)).tip(tip).clicked() {
                 open(&release.url);
             }
         }

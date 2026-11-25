@@ -1,3 +1,8 @@
+# Always build for this target, so there is exactly one output folder
+# (target\x86_64-pc-windows-msvc\...) and no second, stale exe under target\release.
+[build]
+target = "x86_64-pc-windows-msvc"
+
 # Link the C runtime statically: the exe runs on a clean Windows without the
 # Visual C++ Redistributable (no vcruntime140.dll needed).
 [target.x86_64-pc-windows-msvc]

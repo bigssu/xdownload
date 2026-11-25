@@ -98,9 +98,17 @@ fn open(target: &str) {
     let _ = proc::command("explorer").arg(target).spawn();
 }
 
+/// Explorer's argument for showing `file` selected in its folder. The path must be quoted:
+/// Explorer splits an unquoted one at a comma and opens some other folder instead.
+fn select_argument(file: &Path) -> String {
+    format!("/select,\"{}\"", file.display())
+}
+
 /// Opens the folder holding `file` with the file selected.
 fn reveal(file: &Path) {
-    let _ = proc::command("explorer").arg(format!("/select,{}", file.display())).spawn();
+    use std::os::windows::process::CommandExt;
+    // raw_arg: Rust would otherwise quote the whole argument, which Explorer does not accept.
+    let _ = proc::command("explorer").raw_arg(select_argument(file)).spawn();
 }
 
 /// Readies yt-dlp / ffmpeg ahead of the first download, keeps yt-dlp current (once a day),
