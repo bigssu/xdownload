@@ -283,6 +283,8 @@ impl App {
                     }
                 }
                 Msg::Recorded(entry) => {
+                    // Another running window may have added entries since this one read the file.
+                    self.history = settings::load_history();
                     settings::push_history(&mut self.history, entry);
                     settings::store_history(&self.history);
                 }

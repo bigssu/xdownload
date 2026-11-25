@@ -28,6 +28,8 @@ fn agent() -> ureq::Agent {
         .tls_config(TlsConfig::builder().provider(TlsProvider::NativeTls).root_certs(RootCerts::PlatformVerifier).build())
         .timeout_connect(Some(std::time::Duration::from_secs(30)))
         .timeout_recv_response(Some(std::time::Duration::from_secs(60)))
+        // A stalled transfer must fail (and let a cancel finish) instead of waiting forever.
+        .timeout_per_read(Some(std::time::Duration::from_secs(60)))
         .build()
         .new_agent()
 }
