@@ -27,6 +27,7 @@ pub const RED: Color32 = Color32::from_rgb(0xff, 0x4d, 0x5e);
 pub const RED_TOP: Color32 = Color32::from_rgb(255, 90, 105);
 pub const RED_BOTTOM: Color32 = Color32::from_rgb(240, 62, 80);
 pub const SUCCESS: Color32 = Color32::from_rgb(0x2b, 0xd3, 0x8a);
+pub const TOGGLE_OFF: Color32 = Color32::from_rgb(58, 66, 86);
 pub const WINDOW_R: u8 = 14;
 
 pub fn setup(ctx: &egui::Context) {

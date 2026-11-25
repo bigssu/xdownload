@@ -61,14 +61,25 @@ pub fn verify_sha256(path: &Path, expected: &str, label: &str) -> Res<()> {
     Err(fill("checksum_fail", &[("name", label)]))
 }
 
+/// Temporary-file suffix unique to this process, so two app windows preparing the same
+/// binary never write into each other's file.
+fn part_suffix() -> String {
+    format!(".{}.part", std::process::id())
+}
+
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(suffix);
     PathBuf::from(name)
 }
 
-fn fetch_expected(agent: &ureq::Agent, sums_url: &str, filename: &str) -> Res<String> {
-    let sums = agent.get(sums_url).call().map_err(err)?.body_mut().read_to_string().map_err(err)?;
+/// A small text file over HTTPS (at most 10 MB, ureq's limit for `read_to_string`).
+pub fn fetch_text(url: &str) -> Res<String> {
+    agent().get(url).call().map_err(err)?.body_mut().read_to_string().map_err(err)
+}
+
+fn fetch_expected(sums_url: &str, filename: &str) -> Res<String> {
+    let sums = fetch_text(sums_url)?;
     expected_sha256(&sums, filename).ok_or_else(|| fill("checksum_missing", &[("name", filename)]))
 }
 
@@ -95,7 +106,7 @@ fn copy_with_progress(from: &mut dyn Read, to: &mut dyn Write, total: Option<u64
 /// Streams `url` into `dest.part`, verifies it, then renames it into place — a damaged or
 /// tampered download never becomes `dest`.
 fn download_file(agent: &ureq::Agent, url: &str, dest: &Path, expected: &str, label: &str, job: &Job, on_progress: &mut dyn FnMut(f32)) -> Res<()> {
-    let part = with_suffix(dest, ".part");
+    let part = with_suffix(dest, &part_suffix());
     let result = (|| {
         let mut response = agent.get(url).call().map_err(err)?;
         let total = response.body().content_length();
@@ -118,7 +129,7 @@ pub fn extract_ffmpeg(zip_path: &Path, dest: &Path) -> Res<()> {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(zip_path).map_err(err)?).map_err(err)?;
     let member = archive.file_names().find(|name| name.ends_with("/bin/ffmpeg.exe")).map(str::to_owned)
         .ok_or_else(|| fill("zip_no_ffmpeg", &[]))?;
-    let part = with_suffix(dest, ".part");
+    let part = with_suffix(dest, &part_suffix());
     let result = (|| {
         let mut source = archive.by_name(&member).map_err(err)?;
         let mut file = std::fs::File::create(&part).map_err(err)?;
@@ -139,12 +150,17 @@ fn bin_dir() -> Res<PathBuf> {
     Ok(dir)
 }
 
+/// One preparation at a time inside this process: queue items that start together wait here
+/// and then find the binary already cached.
+static PREPARING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Path of yt-dlp.exe, downloading it first when missing.
 pub fn ensure_ytdlp(job: &Job, on_progress: &mut dyn FnMut(f32)) -> Res<String> {
+    let _guard = PREPARING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = bin_dir()?.join("yt-dlp.exe");
     if !path.exists() {
         let agent = agent();
-        let expected = fetch_expected(&agent, YTDLP_SUMS_URL, "yt-dlp.exe")?;
+        let expected = fetch_expected(YTDLP_SUMS_URL, "yt-dlp.exe")?;
         download_file(&agent, YTDLP_URL, &path, &expected, "yt-dlp", job, on_progress)?;
     }
     Ok(path.to_string_lossy().into_owned())
@@ -152,13 +168,14 @@ pub fn ensure_ytdlp(job: &Job, on_progress: &mut dyn FnMut(f32)) -> Res<String> 
 
 /// Path of ffmpeg.exe, downloading and unpacking it first when missing.
 pub fn ensure_ffmpeg(job: &Job, on_progress: &mut dyn FnMut(f32)) -> Res<String> {
+    let _guard = PREPARING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = bin_dir()?;
     let path = dir.join("ffmpeg.exe");
     if !path.exists() {
         let agent = agent();
         // Verifying the archive extends trust to the ffmpeg.exe inside it.
-        let expected = fetch_expected(&agent, &format!("{FFMPEG_BASE_URL}{FFMPEG_SUMS}"), FFMPEG_ZIP)?;
-        let zip_path = dir.join("ffmpeg.zip");
+        let expected = fetch_expected(&format!("{FFMPEG_BASE_URL}{FFMPEG_SUMS}"), FFMPEG_ZIP)?;
+        let zip_path = dir.join(format!("ffmpeg.{}.zip", std::process::id()));
         let result = download_file(&agent, &format!("{FFMPEG_BASE_URL}{FFMPEG_ZIP}"), &zip_path, &expected, "ffmpeg", job, on_progress)
             .and_then(|()| extract_ffmpeg(&zip_path, &path));
         let _ = std::fs::remove_file(&zip_path);
@@ -218,7 +235,7 @@ mod tests {
     #[test]
     fn ffmpeg_is_extracted_from_the_nested_bin_folder() {
         let dir = temp("zip");
-        let zip_path = dir.join("ffmpeg.zip");
+        let zip_path = dir.join(format!("ffmpeg.{}.zip", std::process::id()));
         let write = |members: &[(&str, &str)]| {
             let mut writer = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
             for (name, body) in members {
@@ -231,7 +248,7 @@ mod tests {
         let dest = dir.join("ffmpeg.exe");
         extract_ffmpeg(&zip_path, &dest).unwrap();
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "the real one");
-        assert!(!with_suffix(&dest, ".part").exists());
+        assert!(!with_suffix(&dest, &part_suffix()).exists());
         write(&[("build/bin/ffprobe.exe", "probe")]);
         assert!(extract_ffmpeg(&zip_path, &dir.join("none.exe")).is_err());
         assert!(!dir.join("none.exe").exists());

@@ -4,7 +4,12 @@ use egui_phosphor::regular as ph;
 
 /// Every icon name the app uses.
 #[cfg(test)]
-pub const NAMES: [&str; 12] = ["close", "min", "max", "download", "cancel", "folder", "file", "film", "music", "video", "image", "logo"];
+pub const NAMES: [&str; 37] = [
+    "close", "min", "max", "download", "cancel", "folder", "file", "film", "music", "video", "image", "logo",
+    "retry", "trash", "done", "failed", "waiting", "stopped", "sweep", "open", "update",
+    "convert", "history", "settings", "subs", "info", "playlist", "best", "running", "quality", "balanced", "small",
+    "source", "subfolders", "gpu", "cpu", "files",
+];
 
 pub fn glyph(name: &str) -> Option<&'static str> {
     Some(match name {
@@ -18,6 +23,31 @@ pub fn glyph(name: &str) -> Option<&'static str> {
         "music" => ph::MUSIC_NOTES,
         "video" => ph::FILE_VIDEO,
         "image" => ph::IMAGE,
+        "retry" => ph::ARROW_CLOCKWISE,
+        "trash" => ph::TRASH,
+        "done" => ph::CHECK_CIRCLE,
+        "failed" => ph::WARNING_CIRCLE,
+        "waiting" => ph::HOURGLASS,
+        "stopped" => ph::PROHIBIT,
+        "sweep" => ph::BROOM,
+        "open" => ph::ARROW_SQUARE_OUT,
+        "update" => ph::ARROW_CIRCLE_UP,
+        "convert" => ph::SWAP,
+        "history" => ph::CLOCK_COUNTER_CLOCKWISE,
+        "settings" => ph::GEAR,
+        "subs" => ph::CLOSED_CAPTIONING,
+        "info" => ph::TAG,
+        "playlist" => ph::PLAYLIST,
+        "best" => ph::CROWN_SIMPLE,
+        "running" => ph::PLAY,
+        "quality" => ph::DIAMOND,
+        "balanced" => ph::SCALES,
+        "small" => ph::FEATHER,
+        "source" => ph::ARROWS_OUT,
+        "subfolders" => ph::TREE_STRUCTURE,
+        "gpu" => ph::GRAPHICS_CARD,
+        "cpu" => ph::CPU,
+        "files" => ph::FILES,
         _ => return None,
     })
 }

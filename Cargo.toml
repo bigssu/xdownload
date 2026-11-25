@@ -1,6 +1,6 @@
 [package]
 name = "xdownload2"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
 
 [dependencies]
@@ -14,10 +14,14 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Windows SChannel TLS: no bundled crypto library to build or ship.
 ureq = { version = "3", default-features = false, features = ["native-tls"] }
 sha2 = "0.10"
+# Clipboard text (the version eframe already uses).
+arboard = { version = "3", default-features = false }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = "thin"
+codegen-units = 1
+strip = true
 
 [profile.dev.package."*"]
 opt-level = 3

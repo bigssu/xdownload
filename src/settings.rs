@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const HISTORY_MAX: usize = 100;
-/// Quality choices in menu order; the index is what `Settings::quality` stores.
-pub const QUALITIES: [&str; 3] = ["best", "1080p", "720p"];
+/// Largest video height offered, in menu order; 0 means no limit.
+pub const HEIGHTS: [u32; 6] = [0, 2160, 1440, 1080, 720, 480];
 
 /// %APPDATA%\Xdownload2 — settings, history, cached binaries and logs.
 pub fn app_dir() -> Option<PathBuf> {
@@ -17,15 +17,50 @@ pub struct Settings {
     /// 0 Korean, 1 English.
     pub language: u8,
     pub download_dir: String,
-    pub mp3: bool,
-    /// Index into `QUALITIES`.
-    pub quality: u8,
+    // Download
+    /// 0 MP4, 1 MP3, 2 M4A.
+    pub format: u8,
+    /// Largest video height; 0 = best available.
+    pub height: u32,
+    /// Embed Korean / English subtitles (MP4 only).
+    pub subs: bool,
+    /// Embed the thumbnail and title / uploader tags.
+    pub embed_info: bool,
+    /// A playlist link downloads the whole list instead of the one video.
+    pub playlist: bool,
+    /// Downloads running at once, 1..=5.
+    pub parallel: u8,
+    // Conversion
+    /// 0 MP4, 1 MP3, 2 GIF.
+    pub video_target: u8,
+    /// Largest output height for MP4; 0 keeps the source size.
+    pub video_height: u32,
+    /// 0 quality first, 1 balanced, 2 small file.
+    pub video_quality: u8,
+    /// 0 JPG, 1 PNG, 2 WebP.
+    pub image_target: u8,
+    /// A picked or dropped folder also contributes the files in its subfolders.
+    pub subfolders: bool,
+    /// Use the graphics card's H.264 encoder when one works.
+    pub gpu: bool,
+    // App
+    /// Add a YouTube link found on the clipboard when the window gets focus.
+    pub auto_paste: bool,
+    /// Open the save folder when every queued download has finished.
+    pub open_when_done: bool,
+    /// Local date (YYYY-MM-DD) of the last yt-dlp self-update, so it runs once a day.
+    pub last_update_day: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         let home = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default();
-        Self { language: 0, download_dir: home.join("Downloads").to_string_lossy().into_owned(), mp3: false, quality: 0 }
+        Self {
+            language: 0, download_dir: home.join("Downloads").to_string_lossy().into_owned(),
+            format: 0, height: 0, subs: false, embed_info: false, playlist: false, parallel: 3,
+            video_target: 0, video_height: 1080, video_quality: 1, image_target: 0, subfolders: false, gpu: true,
+            auto_paste: true, open_when_done: false, last_update_day: String::new(),
+        }
     }
 }
 
@@ -40,8 +75,8 @@ impl Settings {
         }
     }
 
-    pub fn quality_name(&self) -> &'static str {
-        QUALITIES[(self.quality as usize).min(QUALITIES.len() - 1)]
+    pub fn parallel(&self) -> usize {
+        self.parallel.clamp(1, 5) as usize
     }
 }
 
@@ -49,6 +84,10 @@ impl Settings {
 #[serde(default)]
 pub struct Entry {
     pub url: String,
+    /// Video title; empty in entries written by 1.0.
+    pub title: String,
+    /// The downloaded file; empty in entries written by 1.0.
+    pub file: String,
     pub format: String,
     pub quality: String,
     /// Folder the file was saved in.
@@ -99,24 +138,28 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("xdownload2_settings_{}", std::process::id()));
         let file = dir.join("nested/settings.json");
         assert_eq!(read_json::<Settings>(&file), Settings::default());
-        let saved = Settings { language: 1, download_dir: "D:/v".into(), mp3: true, quality: 2 };
+        let saved = Settings { language: 1, download_dir: "D:/v".into(), format: 2, height: 720, parallel: 5, gpu: false, ..Default::default() };
         write_json(&file, &saved);
         assert_eq!(read_json::<Settings>(&file), saved);
         assert!(!file.with_extension("json.tmp").exists());
-        // Unknown and missing fields from other versions are tolerated.
-        std::fs::write(&file, r#"{"mp3": true, "future_field": 1}"#).unwrap();
+        // Unknown fields (1.0 wrote "mp3" and "quality") and missing ones are tolerated.
+        std::fs::write(&file, r#"{"mp3": true, "quality": 2, "language": 1}"#).unwrap();
         let partial: Settings = read_json(&file);
-        assert!(partial.mp3 && partial.download_dir == Settings::default().download_dir);
+        assert_eq!(partial, Settings { language: 1, ..Default::default() });
         std::fs::write(&file, "not json").unwrap();
         assert_eq!(read_json::<Settings>(&file), Settings::default());
-        assert!(read_json::<Vec<Entry>>(&file).is_empty());
+        // A 1.0 history entry has no title or file.
+        std::fs::write(&file, r#"[{"url": "u", "format": "mp4", "quality": "best", "path": "C:/d", "when": "w"}]"#).unwrap();
+        let history: Vec<Entry> = read_json(&file);
+        assert_eq!((history.len(), history[0].url.as_str(), history[0].file.as_str()), (1, "u", ""));
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn quality_index_is_clamped() {
-        assert_eq!(Settings { quality: 1, ..Default::default() }.quality_name(), "1080p");
-        assert_eq!(Settings { quality: 200, ..Default::default() }.quality_name(), "720p");
+    fn parallel_downloads_are_clamped() {
+        assert_eq!(Settings::default().parallel(), 3);
+        assert_eq!(Settings { parallel: 0, ..Default::default() }.parallel(), 1);
+        assert_eq!(Settings { parallel: 99, ..Default::default() }.parallel(), 5);
     }
 
     #[test]

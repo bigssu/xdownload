@@ -84,7 +84,16 @@ pub enum Kind {
     Ghost,
 }
 
-/// A button of exactly `size` with an icon followed by a label.
+/// A button of exactly `size` showing only an icon; `tooltip` is its name and bubble.
+pub fn action_icon(ui: &mut Ui, icon: &str, tooltip: &str, kind: Kind, size: Vec2) -> Response {
+    debug_assert!(!tooltip.trim().is_empty(), "Icon-only controls require a tooltip");
+    let response = action_button(ui, icon, "", kind, size);
+    let enabled = ui.is_enabled();
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tooltip));
+    response.tip(tooltip)
+}
+
+/// A button of exactly `size` with an icon followed by a label (no label: the icon alone).
 pub fn action_button(ui: &mut Ui, icon: &str, label: &str, kind: Kind, size: Vec2) -> Response {
     let (_, response) = ui.allocate_exact_size(size, Sense::click());
     let r = motion(ui, &response);
@@ -103,40 +112,80 @@ pub fn action_button(ui: &mut Ui, icon: &str, label: &str, kind: Kind, size: Vec
     }
     let ink = if kind == Kind::Ghost { TEXT } else { Color32::WHITE };
     let galley = p.layout_no_wrap(label.to_owned(), FontId::proportional(13.5), ink);
-    let icon_size = 18.0;
-    let total = icon_size + 8.0 + galley.size().x;
+    let icon_size = if label.is_empty() { 22.0 } else { 18.0 };
+    let total = icon_size + if label.is_empty() { 0.0 } else { 8.0 + galley.size().x };
     let left = r.center().x - total / 2.0;
     icons::paint(p, Rect::from_min_size(pos2(left, r.center().y - icon_size / 2.0), Vec2::splat(icon_size)), icon, ink);
     p.galley(pos2(left + icon_size + 8.0, r.center().y - galley.size().y / 2.0), galley, ink);
+    let enabled = ui.is_enabled();
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     response
 }
 
 /// A 32 px icon-only button; the tooltip is its name, so it is required.
 pub fn icon_button(ui: &mut Ui, icon: &str, tooltip: &str) -> Response {
+    icon_button_sized(ui, icon, tooltip, 32.0)
+}
+
+/// An icon-only button of `side` px (26 for list rows).
+pub fn icon_button_sized(ui: &mut Ui, icon: &str, tooltip: &str, side: f32) -> Response {
     debug_assert!(!tooltip.trim().is_empty(), "Icon-only controls require a tooltip");
-    let (_, response) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
+    let (_, response) = ui.allocate_exact_size(Vec2::splat(side), Sense::click());
+    let enabled = ui.is_enabled();
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tooltip));
     let r = motion(ui, &response);
     let hover = ui.ctx().animate_bool_with_time(response.id.with("fill"), response.hovered(), 0.15);
     ui.painter().rect_filled(r, 9, if icon == "close" { RED.gamma_multiply(hover) } else { RAISED.gamma_multiply(hover) });
-    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(17.0, 17.0)), icon, if response.hovered() { TEXT } else { MUTED });
+    icons::paint(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(side * 0.53)), icon, if response.hovered() { TEXT } else { MUTED });
     response.tip(tooltip)
+}
+
+/// A switch followed by its label; clicking either flips it.
+pub fn toggle(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(13.0), TEXT);
+    let (r, mut response) = ui.allocate_exact_size(vec2(42.0 + 8.0 + galley.size().x, 24.0), Sense::click());
+    if response.clicked() {
+        *value = !*value;
+        response.mark_changed();
+    }
+    let (on, enabled) = (*value, ui.is_enabled());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, label));
+    let t = ui.ctx().animate_bool_with_time(response.id.with("toggle"), *value, 0.28);
+    let track = Rect::from_min_size(r.min, vec2(42.0, 24.0));
+    ui.painter().rect_filled(track, 12, TOGGLE_OFF);
+    ui.painter().rect_filled(track, 12, ACCENT.gamma_multiply(t));
+    ui.painter().circle_filled(pos2(track.left() + 12.0 + 18.0 * spring(t), track.center().y), 9.0, TEXT);
+    ui.painter().galley(pos2(track.right() + 8.0, r.center().y - galley.size().y / 2.0), galley, TEXT);
+    response
 }
 
 /// A track of text options with a sliding light pill under the chosen one.
 pub fn segmented(ui: &mut Ui, id_source: impl Hash, labels: &[&str], selected: &mut usize, width: f32) -> Response {
+    let items: Vec<(&str, &str)> = labels.iter().map(|label| (*label, "")).collect();
+    segmented_tips(ui, id_source, &items, selected, width)
+}
+
+/// A segmented track whose cells are `(label, tooltip)`. A label that names an icon is drawn
+/// as that icon; its tooltip then is its name, so it must not be empty.
+pub fn segmented_tips(ui: &mut Ui, id_source: impl Hash, items: &[(&str, &str)], selected: &mut usize, width: f32) -> Response {
+    debug_assert!(items.iter().all(|(label, tip)| icons::glyph(label).is_none() || !tip.trim().is_empty()), "Icon-only controls require a tooltip");
     let (r, mut response) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
     let id = ui.make_persistent_id(id_source);
     ui.painter().rect_filled(r, 11, RAISED);
     ui.painter().rect_stroke(r, 11, Stroke::new(1.0_f32, LINE), StrokeKind::Inside);
-    let (_, cell) = segment_geometry(width, labels.len(), *selected);
-    for i in 0..labels.len() {
+    let (_, cell) = segment_geometry(width, items.len(), *selected);
+    for (i, (label, tip)) in items.iter().enumerate() {
         let cell_rect = Rect::from_min_size(r.min + vec2(3.0 + i as f32 * cell, 3.0), vec2(cell, 28.0));
-        if ui.interact(cell_rect, id.with(i), Sense::click()).clicked() && *selected != i {
+        let cell_response = ui.interact(cell_rect, id.with(i), Sense::click());
+        let (enabled, on, name) = (ui.is_enabled(), *selected == i, if tip.is_empty() { *label } else { *tip });
+        cell_response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, on, name));
+        if cell_response.clicked() && *selected != i {
             *selected = i;
             response.mark_changed();
         }
+        cell_response.tip(*tip);
     }
-    let (left, _) = segment_geometry(width, labels.len(), *selected);
+    let (left, _) = segment_geometry(width, items.len(), *selected);
     // (selection, slide start, current position) so a change animates from where the pill is.
     let motion_id = id.with("indicator");
     let mut state = ui.ctx().data_mut(|data| data.get_temp::<(usize, f32, f32)>(motion_id)).unwrap_or((*selected, left, left));
@@ -149,22 +198,45 @@ pub fn segmented(ui: &mut Ui, id_source: impl Hash, labels: &[&str], selected: &
     state.2 = x;
     ui.ctx().data_mut(|data| data.insert_temp(motion_id, state));
     ui.painter().rect_filled(Rect::from_min_size(r.min + vec2(x, 3.0), vec2(cell, 28.0)), 8, SELECTED);
-    for (i, label) in labels.iter().enumerate() {
+    for (i, (label, _)) in items.iter().enumerate() {
         let center = pos2(r.left() + 3.0 + (i as f32 + 0.5) * cell, r.center().y);
-        ui.painter().text(center, Align2::CENTER_CENTER, *label, FontId::proportional(13.0), if i == *selected { ON_SELECTED } else { MUTED });
+        let color = if i == *selected { ON_SELECTED } else { MUTED };
+        if icons::glyph(label).is_some() {
+            icons::paint(ui.painter(), Rect::from_center_size(center, vec2(18.0, 18.0)), label, color);
+        } else {
+            ui.painter().text(center, Align2::CENTER_CENTER, *label, FontId::proportional(13.0), color);
+        }
     }
     response
 }
 
-/// A full-width progress bar; `fraction` is 0..=1.
-pub fn progress_bar(ui: &mut Ui, fraction: f32) {
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 8.0), Sense::hover());
-    ui.painter().rect_filled(r, 4, WELL);
-    let fraction = fraction.clamp(0.0, 1.0);
-    if fraction > 0.0 {
-        let fill = Rect::from_min_size(r.min, vec2((r.width() * fraction).max(r.height()), r.height()));
-        paint_gradient(ui.painter(), fill, 4.0, ACCENT, ACCENT_END);
+/// An icon that switches an option on and off; lit with the accent colour while on.
+pub fn chip(ui: &mut Ui, value: &mut bool, icon: &str, tooltip: &str) -> Response {
+    debug_assert!(!tooltip.trim().is_empty(), "Icon-only controls require a tooltip");
+    let (_, mut response) = ui.allocate_exact_size(vec2(44.0, 34.0), Sense::click());
+    if response.clicked() {
+        *value = !*value;
+        response.mark_changed();
     }
+    let (on, enabled) = (*value, ui.is_enabled());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, tooltip));
+    let r = motion(ui, &response);
+    let t = ui.ctx().animate_bool_with_time(response.id.with("chip"), on, 0.18);
+    ui.painter().rect_filled(r, 11, if response.hovered() { HOVER } else { RAISED });
+    ui.painter().rect_filled(r, 11, ACCENT.gamma_multiply(0.85 * t));
+    ui.painter().rect_stroke(r, 11, Stroke::new(1.0_f32, if on { ACCENT } else { LINE }), StrokeKind::Inside);
+    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(19.0, 19.0)), icon, if on { Color32::WHITE } else { MUTED });
+    response.tip(tooltip)
+}
+
+/// An icon with a number beside it (queue counts); the tooltip says what is counted.
+pub fn icon_count(ui: &mut Ui, icon: &str, count: usize, tooltip: &str) -> Response {
+    let galley = ui.painter().layout_no_wrap(count.to_string(), FontId::proportional(12.5), MUTED);
+    let (r, response) = ui.allocate_exact_size(vec2(16.0 + 4.0 + galley.size().x, 22.0), Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, format!("{tooltip} {count}")));
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.left() + 8.0, r.center().y), vec2(15.0, 15.0)), icon, MUTED);
+    ui.painter().galley(pos2(r.left() + 20.0, r.center().y - galley.size().y / 2.0), galley, MUTED);
+    response.tip(tooltip)
 }
 
 /// App tooltip: an inverted (light) bubble centred above the widget, flipped below only when
@@ -289,6 +361,44 @@ mod tests {
     }
 
     #[test]
+    fn toggle_flips_on_click_and_reports_the_change() {
+        let ctx = egui::Context::default();
+        let rect = std::cell::Cell::new(Rect::NOTHING);
+        let (mut value, mut changes) = (false, 0);
+        frames(&ctx, 4, || rect.get().center(), |ui| {
+            let response = toggle(ui, &mut value, "Subtitles");
+            rect.set(response.rect);
+            changes += usize::from(response.changed());
+        });
+        assert_eq!((value, changes), (true, 1));
+        assert!(rect.get().width() > 60.0, "the label is part of the click target");
+    }
+
+    #[test]
+    fn chip_flips_on_click_and_keeps_its_size() {
+        let ctx = egui::Context::default();
+        let rect = std::cell::Cell::new(Rect::NOTHING);
+        let (mut value, mut changes) = (false, 0);
+        frames(&ctx, 4, || rect.get().center(), |ui| {
+            let response = chip(ui, &mut value, "subs", "Subtitles");
+            rect.set(response.rect);
+            changes += usize::from(response.changed());
+        });
+        assert_eq!((value, changes, rect.get().size()), (true, 1, vec2(44.0, 34.0)));
+    }
+
+    #[test]
+    fn icon_cells_select_like_text_cells() {
+        let ctx = egui::Context::default();
+        let track = std::cell::Cell::new(Rect::NOTHING);
+        let mut selected = 0usize;
+        frames(&ctx, 4, || pos2(track.get().left() + track.get().width() * 0.75, track.get().center().y), |ui| {
+            track.set(segmented_tips(ui, "tabs", &[("download", "Download"), ("convert", "Convert")], &mut selected, 120.0).rect);
+        });
+        assert_eq!(selected, 1);
+    }
+
+    #[test]
     fn segmented_geometry_stays_inside_track() {
         assert_eq!(segment_geometry(198.0, 3, 0), (3.0, 64.0));
         assert_eq!(segment_geometry(198.0, 3, 2), (131.0, 64.0));
@@ -318,6 +428,8 @@ mod tests {
         assert!(tip_rect(screen, edge_icon, size).0.right() <= screen.right());
     }
 
+    // The check is a debug assertion, so it only exists in debug builds.
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "Icon-only controls require a tooltip")]
     fn icon_controls_reject_empty_tooltips() {
