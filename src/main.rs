@@ -12,6 +12,7 @@ mod i18n;
 mod proc;
 mod queue;
 mod settings;
+mod shell;
 mod tabs;
 mod ui;
 mod update;
@@ -21,10 +22,11 @@ use i18n::tr;
 use proc::Job;
 use queue::{Applied, Limits, Msg, Queue, Work};
 use settings::{Entry, Settings};
-use std::path::{Path, PathBuf};
+use shell::open;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use ui::theme::{self, ACCENT, BG, LINE, MUTED, RED, SUCCESS};
-use ui::widgets::{self as w, Tip};
+use ui::widgets as w;
 
 const APP_NAME: &str = "Xdownload2";
 const TITLE_H: f32 = 50.0;
@@ -93,24 +95,6 @@ fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
-/// Opens a file, folder or web link with whatever Windows uses for it.
-fn open(target: &str) {
-    let _ = proc::command("explorer").arg(target).spawn();
-}
-
-/// Explorer's argument for showing `file` selected in its folder. The path must be quoted:
-/// Explorer splits an unquoted one at a comma and opens some other folder instead.
-fn select_argument(file: &Path) -> String {
-    format!("/select,\"{}\"", file.display())
-}
-
-/// Opens the folder holding `file` with the file selected.
-fn reveal(file: &Path) {
-    use std::os::windows::process::CommandExt;
-    // raw_arg: Rust would otherwise quote the whole argument, which Explorer does not accept.
-    let _ = proc::command("explorer").raw_arg(select_argument(file)).spawn();
-}
-
 /// Readies yt-dlp / ffmpeg ahead of the first download, keeps yt-dlp current (once a day),
 /// finds the hardware encoder and looks for a newer app version.
 fn startup(update_ytdlp: bool, use_gpu: bool, tx: Sender<Background>, ctx: egui::Context) {
@@ -123,13 +107,16 @@ fn startup(update_ytdlp: bool, use_gpu: bool, tx: Sender<Background>, ctx: egui:
     let tools = binaries::ensure_ytdlp(&job, &mut progress).and_then(|ytdlp| Ok((ytdlp, binaries::ensure_ffmpeg(&job, &mut progress)?)));
     match tools {
         Ok((ytdlp, ffmpeg)) => {
-            if update_ytdlp {
-                send(Background::Status(Status::new("prep_update"), Tone::Normal));
-                downloader::update_once(&ytdlp, &job);
-                send(Background::Updated);
-            }
+            // First, as it needs no network: video conversions wait for it to use the GPU.
             if use_gpu {
                 send(Background::Encoder(converter::detect_encoder(&ffmpeg)));
+            }
+            if update_ytdlp {
+                send(Background::Status(Status::new("prep_update"), Tone::Normal));
+                // Only a finished update counts for today; offline, the next start tries again.
+                if downloader::update_once(&ytdlp, &job) {
+                    send(Background::Updated);
+                }
             }
             send(Background::Status(Status::new("ready"), Tone::Normal));
         }
@@ -139,6 +126,8 @@ fn startup(update_ytdlp: bool, use_gpu: bool, tx: Sender<Background>, ctx: egui:
     if let Some(release) = update::check() {
         send(Background::Release(release));
     }
+    // Wakes the UI once more, so what waited for start-up to end is enabled at once.
+    ctx.request_repaint();
 }
 
 struct App {
@@ -168,6 +157,8 @@ struct App {
     /// `--screenshot <png>`: draw demo content, save one frame and quit.
     shot: Option<PathBuf>,
     frame_no: u32,
+    /// The start-up thread that prepares, updates and probes the tools.
+    startup: Option<std::thread::JoinHandle<()>>,
 }
 
 impl App {
@@ -178,7 +169,7 @@ impl App {
         app.tab = tab;
         if app.shot.is_none() {
             let (update_ytdlp, use_gpu, ctx) = (app.s.last_update_day != today(), app.s.gpu, cc.egui_ctx.clone());
-            std::thread::spawn(move || startup(update_ytdlp, use_gpu, background_tx, ctx));
+            app.startup = Some(std::thread::spawn(move || startup(update_ytdlp, use_gpu, background_tx, ctx)));
             app.take_inputs(inputs);
         }
         app
@@ -189,7 +180,7 @@ impl App {
         let mut app = Self {
             stored: s.clone(), s, tab: Tab::Download, urls: String::new(), history: Vec::new(), queue: Queue::default(), tx, rx, background,
             notice: (Status::new("ready"), Tone::Normal), encoder: None, release: None, focused: false, last_clipboard: String::new(),
-            active: false, downloaded: false, shot, frame_no: 0,
+            active: false, downloaded: false, shot, frame_no: 0, startup: None,
         };
         if app.shot.is_some() {
             app.demo();
@@ -226,6 +217,11 @@ impl App {
         self.add_dropped(paths.into_iter().map(PathBuf::from).collect());
     }
 
+    /// The start-up thread is still preparing, updating or probing the tools.
+    fn starting(&self) -> bool {
+        self.startup.as_ref().is_some_and(|thread| !thread.is_finished())
+    }
+
     fn set_notice(&mut self, status: Status, tone: Tone) {
         self.notice = (status, tone);
     }
@@ -259,7 +255,7 @@ impl App {
             return self.set_notice(Status::new("need_url"), Tone::Bad);
         }
         let options = self.options();
-        let added = urls.into_iter().filter(|url| self.queue.add(Work::Download { url: url.clone(), options: options.clone() }).is_some()).count();
+        let added = self.queue.add_all(urls.into_iter().map(|url| Work::Download { url, options: options.clone() }));
         self.urls.clear();
         self.report_added(added, "already");
     }
@@ -275,7 +271,7 @@ impl App {
     /// Queues the media under `sources` for `target`; returns how many were added.
     fn add_conversions(&mut self, sources: &[PathBuf], target: converter::Target) -> usize {
         let files = converter::collect_media_files(sources, target, self.s.subfolders);
-        files.into_iter().filter(|source| self.queue.add(Work::Convert { source: source.clone(), target }).is_some()).count()
+        self.queue.add_all(files.into_iter().map(|source| Work::Convert { source, target }))
     }
 
     /// Dropped files go to the converter that fits them; folders are searched for both kinds.
@@ -344,8 +340,8 @@ impl App {
             }
         }
         while let Ok(msg) = self.rx.try_recv() {
-            if let Applied::Downloaded(item, file) = self.queue.apply(msg) {
-                let entry = queue::history_entry(item, &file);
+            if let Applied::Downloaded(item, file, title) = self.queue.apply(msg) {
+                let entry = queue::history_entry(item, &file, title);
                 self.downloaded = true;
                 if let (Some(entry), None) = (entry, &self.shot) {
                     // Another running window may have added entries since this one read the file.
@@ -372,10 +368,10 @@ impl App {
             });
         }
         let active = self.queue.active();
-        if self.active && !active {
-            if self.downloaded && self.s.open_when_done {
-                open(&self.s.download_dir);
-            }
+        if open_folder_now(self.active, active, self.downloaded, self.s.open_when_done) {
+            open(&self.s.download_dir);
+        }
+        if !active {
             self.downloaded = false;
         }
         self.active = active;
@@ -414,7 +410,7 @@ impl App {
                         }
                         ui.separator();
                         let mut language = usize::from(self.s.language == 1);
-                        if w::segmented(ui, "language", &["한", "En"], &mut language, 76.0).tip(tr("lang_tip")).changed() {
+                        if w::segmented_tips(ui, "language", &[("한", tr("lang_tip")), ("En", tr("lang_tip"))], &mut language, 76.0).changed() {
                             self.s.language = language as u8;
                             i18n::set_language(self.s.language);
                         }
@@ -423,6 +419,9 @@ impl App {
                                 open(&release.url);
                             }
                         }
+                        ui.add_space(4.0);
+                        // Not selectable: a selectable label would take the drag that moves the window.
+                        ui.add(egui::Label::new(RichText::new(build_version().as_str()).size(11.0).color(MUTED)).selectable(false));
                         // The rest of the bar moves the window.
                         let (_, drag) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
                         if drag.drag_started() {
@@ -507,11 +506,21 @@ impl App {
     }
 }
 
-/// "v2.0.0 · 11-25 10:12": package version plus the local time `build.rs` stamped.
-fn build_version() -> String {
-    let secs: i64 = env!("XDOWNLOAD2_BUILD_TIME").parse().unwrap_or(0);
-    let time = chrono::DateTime::from_timestamp(secs, 0).map(|t| t.with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string());
-    format!("v{} · {}", env!("CARGO_PKG_VERSION"), time.unwrap_or_default())
+/// The save folder opens once, at the moment the queue runs dry, and only when a download
+/// finished in that run and the user asked for it.
+fn open_folder_now(was_active: bool, active: bool, downloaded: bool, wanted: bool) -> bool {
+    was_active && !active && downloaded && wanted
+}
+
+/// "v2.0.0 · 11-25 10:12": package version plus the local time `build.rs` stamped. Built
+/// once: the title bar shows it every frame.
+fn build_version() -> &'static String {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        let secs: i64 = env!("XDOWNLOAD2_BUILD_TIME").parse().unwrap_or(0);
+        let time = chrono::DateTime::from_timestamp(secs, 0).map(|t| t.with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string());
+        format!("v{} · {}", env!("CARGO_PKG_VERSION"), time.unwrap_or_default())
+    })
 }
 
 impl eframe::App for App {

@@ -7,6 +7,7 @@ use crate::converter::{self, Encoder, Target};
 use crate::downloader::{self, Event, Options};
 use crate::proc::{Job, CANCELLED};
 use crate::{binaries, settings};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -46,7 +47,9 @@ impl Limits {
     /// Videos: one at a time on the CPU (libx264 already uses every core), two on a graphics
     /// card. Images: one per core, since each ffmpeg uses a single core for a still.
     pub fn new(parallel_downloads: usize, gpu: bool) -> Self {
-        let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
+        // Asked once: this runs every frame.
+        static CORES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        let cores = *CORES.get_or_init(|| std::thread::available_parallelism().map_or(4, |n| n.get()));
         Self { download: parallel_downloads.max(1), video: if gpu { 2 } else { 1 }, image: cores.clamp(1, 8) }
     }
 
@@ -118,8 +121,8 @@ pub enum Update {
     Title(String),
     Progress(f32),
     Note(Note),
-    /// A file was completed.
-    File(PathBuf),
+    /// A file was completed; `title` is the video's title for a download.
+    File { path: PathBuf, title: String },
     Finished(Outcome),
 }
 
@@ -132,10 +135,27 @@ pub struct Msg {
 /// What `Queue::apply` tells the caller about.
 pub enum Applied<'a> {
     Nothing,
-    /// A download finished this file.
-    Downloaded(&'a Item, PathBuf),
+    /// A download finished this file (with the video's title).
+    Downloaded(&'a Item, PathBuf, String),
     /// An item reached Done, Failed or Cancelled.
     Finished,
+}
+
+/// What makes two pieces of work the same: a link, whatever its options (both yt-dlp runs
+/// would write the same files), or a source file with its target.
+#[derive(PartialEq, Eq, Hash)]
+enum Key {
+    Link(String),
+    File(PathBuf, Target),
+}
+
+impl Key {
+    fn of(work: &Work) -> Self {
+        match work {
+            Work::Download { url, .. } => Key::Link(url.clone()),
+            Work::Convert { source, target } => Key::File(source.clone(), *target),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -179,16 +199,22 @@ impl Queue {
     /// is a second download of the same link with other options: both yt-dlp runs would write
     /// the same intermediate and final file names.
     pub fn add(&mut self, work: Work) -> Option<u64> {
-        let same = |other: &Work| match (other, &work) {
-            (Work::Download { url: a, .. }, Work::Download { url: b, .. }) => a == b,
-            _ => *other == work,
-        };
-        if self.items.iter().any(|item| !item.finished() && same(&item.work)) {
-            return None;
+        (self.add_all([work]) == 1).then_some(self.next_id)
+    }
+
+    /// `add` for many at once; returns how many were added. The waiting and running work is
+    /// collected once, so dropping thousands of files stays fast.
+    pub fn add_all(&mut self, works: impl IntoIterator<Item = Work>) -> usize {
+        let mut active: HashSet<Key> = self.items.iter().filter(|item| !item.finished()).map(|item| Key::of(&item.work)).collect();
+        let mut added = 0;
+        for work in works {
+            if active.insert(Key::of(&work)) {
+                self.next_id += 1;
+                self.items.push(Item { id: self.next_id, title: default_title(&work), work, state: State::Waiting, progress: 0.0, note: Note::None, file: None, job: None });
+                added += 1;
+            }
         }
-        self.next_id += 1;
-        self.items.push(Item { id: self.next_id, title: default_title(&work), work, state: State::Waiting, progress: 0.0, note: Note::None, file: None, job: None });
-        Some(self.next_id)
+        added
     }
 
     fn get_mut(&mut self, id: u64) -> Option<&mut Item> {
@@ -231,10 +257,10 @@ impl Queue {
             Update::Title(title) => item.title = title,
             Update::Progress(fraction) => item.progress = fraction.clamp(0.0, 1.0),
             Update::Note(note) => item.note = note,
-            Update::File(path) => {
+            Update::File { path, title } => {
                 item.file = Some(path.clone());
                 if matches!(item.work, Work::Download { .. }) {
-                    return Applied::Downloaded(item, path);
+                    return Applied::Downloaded(item, path, title);
                 }
             }
             Update::Finished(outcome) => {
@@ -307,15 +333,6 @@ impl Queue {
     }
 }
 
-/// `name.f137.mp4` (an intermediate stream file) → `name`; `name.mp4` → `name`.
-pub fn display_title(file_name: &str) -> String {
-    let stem = file_name.rsplit_once('.').map_or(file_name, |(stem, _)| stem);
-    match stem.rsplit_once(".f") {
-        Some((title, id)) if !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') && id.bytes().next().is_some_and(|b| b.is_ascii_digit()) => title.to_owned(),
-        _ => stem.to_owned(),
-    }
-}
-
 /// The body of one worker thread: prepares the tools, runs the work and reports through `send`.
 /// Always ends with exactly one `Update::Finished`.
 pub fn run(work: Work, job: &Job, use_gpu: bool, send: &dyn Fn(Update)) {
@@ -342,21 +359,38 @@ fn run_inner(work: &Work, job: &Job, use_gpu: bool, send: &dyn Fn(Update)) -> Re
             send(Update::Progress(0.0));
             send(Update::Note(Note::None));
             let mut playlist = None;
-            downloader::download_with_auto_update(url, options, &ytdlp, &ffmpeg, job, &mut || send(Update::Note(Note::Retrying)), &mut |event| match event {
-                Event::Progress { percent, speed, eta } => {
-                    send(Update::Progress(percent / 100.0));
-                    send(Update::Note(Note::Speed { speed: speed.to_owned(), eta: eta.to_owned() }));
+            // The reason yt-dlp printed, when it printed one, says more than its exit code. Shared
+            // with the retry callback, which forgets the first attempt's reason.
+            let reason = std::cell::RefCell::new(String::new());
+            // The video being downloaded: its streams (video and audio arrive one after the
+            // other, each 0..100%) and its title. Set again for every playlist video and retry.
+            let (mut streams, mut title) = (String::new(), String::new());
+            let on_retry = &mut || {
+                reason.borrow_mut().clear();
+                send(Update::Note(Note::Retrying));
+            };
+            let code = downloader::download_with_auto_update(url, options, &ytdlp, &ffmpeg, job, on_retry, &mut |event| match event {
+                Event::Progress { stream, percent, speed, eta } => {
+                    // Subtitles and thumbnails are not among the streams and do not move the bar.
+                    if let Some(fraction) = download_progress(&streams, stream, percent) {
+                        send(Update::Progress(fraction));
+                        send(Update::Note(Note::Speed { speed: speed.to_owned(), eta: eta.to_owned() }));
+                    }
                 }
                 Event::Item { index, total } => playlist = Some((index, total)),
-                Event::Destination(name) => {
-                    let title = display_title(name);
+                Event::Title { streams: ids, title: name } => {
+                    streams = ids.to_owned();
+                    title = name.to_owned();
                     send(Update::Title(match playlist {
-                        Some((index, total)) => format!("({index}/{total}) {title}"),
-                        None => title,
+                        Some((index, total)) => format!("({index}/{total}) {name}"),
+                        None => name.to_owned(),
                     }));
                 }
-                Event::File(path) => send(Update::File(PathBuf::from(path))),
-            }).map_err(|error| error.to_string())
+                Event::File(path) => send(Update::File { path: PathBuf::from(path), title: title.clone() }),
+                Event::Error(text) => *reason.borrow_mut() = text.to_owned(),
+            }).map_err(|error| error.to_string())?;
+            let reason = reason.into_inner();
+            if code == 0 || code == CANCELLED || reason.is_empty() { Ok(code) } else { Err(reason) }
         }
         Work::Convert { source, target } => {
             let ffmpeg = binaries::ensure_ffmpeg(job, &mut prep_progress)?;
@@ -368,19 +402,32 @@ fn run_inner(work: &Work, job: &Job, use_gpu: bool, send: &dyn Fn(Update)) -> Re
                 if converted.encoder != encoder {
                     send(Update::Note(Note::Encoder(converted.encoder.label())));
                 }
-                send(Update::File(converted.dest));
+                send(Update::File { path: converted.dest, title: String::new() });
             }
             Ok(converted.code)
         }
     }
 }
 
+/// Overall progress (0..=1) of a download whose streams (`137+140`) arrive one after the
+/// other, from a progress line about `stream`. A line about all streams at once (ffmpeg
+/// fetching a live or HLS video in one pass reports `137+140`) is the whole download.
+/// `None` for anything else, such as subtitles.
+fn download_progress(streams: &str, stream: &str, percent: f32) -> Option<f32> {
+    if stream == streams {
+        return Some(percent / 100.0);
+    }
+    let count = streams.split('+').count();
+    let index = streams.split('+').position(|known| known == stream)?;
+    Some((index as f32 + percent / 100.0) / count as f32)
+}
+
 /// History entry for a file a download finished.
-pub fn history_entry(item: &Item, file: &std::path::Path) -> Option<settings::Entry> {
+pub fn history_entry(item: &Item, file: &std::path::Path, title: String) -> Option<settings::Entry> {
     let Work::Download { url, options } = &item.work else { return None };
     Some(settings::Entry {
         url: url.clone(),
-        title: file.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default(),
+        title,
         file: file.to_string_lossy().into_owned(),
         format: options.format.name().into(),
         quality: options.quality_name(),
@@ -448,10 +495,11 @@ mod tests {
         queue.apply(Msg { id, update: Update::Progress(7.0) });
         queue.apply(Msg { id, update: Update::Note(Note::Speed { speed: "1MiB/s".into(), eta: "00:03".into() }) });
         assert_eq!((queue.items[0].title.as_str(), queue.items[0].progress), ("Song", 1.0));
-        let Applied::Downloaded(item, file) = queue.apply(Msg { id, update: Update::File("C:/out/Song.mp4".into()) }) else { panic!("a finished download file is reported") };
-        let entry = history_entry(item, &file).unwrap();
-        assert_eq!((entry.title.as_str(), entry.format.as_str(), entry.quality.as_str(), entry.path.as_str(), entry.url.as_str()), ("Song", "mp4", "720p", "C:/out", "a"));
-        assert!(entry.file.ends_with("Song.mp4"));
+        let update = Update::File { path: "C:/out/Song ⧸ live [abcdefghijk].mp4".into(), title: "Song / live".into() };
+        let Applied::Downloaded(item, file, title) = queue.apply(Msg { id, update }) else { panic!("a finished download file is reported") };
+        let entry = history_entry(item, &file, title).unwrap();
+        assert_eq!((entry.title.as_str(), entry.format.as_str(), entry.quality.as_str(), entry.path.as_str(), entry.url.as_str()), ("Song / live", "mp4", "720p", "C:/out", "a"), "the title as YouTube has it, not as the file name had to spell it");
+        assert!(entry.file.ends_with("Song ⧸ live [abcdefghijk].mp4"), "the history keeps the real file name");
         finish(&mut queue, id, Outcome::Failed("exit 1".into()));
         assert_eq!((queue.items[0].state, &queue.items[0].note), (State::Failed, &Note::Error("exit 1".into())));
         assert!(matches!(queue.apply(Msg { id, update: Update::Progress(0.1) }), Applied::Nothing), "late messages are dropped");
@@ -459,9 +507,9 @@ mod tests {
         // A conversion's file is kept on the item but is not a download for the history.
         let id = queue.add(image("p.png")).unwrap();
         queue.start_next(LIMITS);
-        assert!(matches!(queue.apply(Msg { id, update: Update::File("p.jpg".into()) }), Applied::Nothing));
+        assert!(matches!(queue.apply(Msg { id, update: Update::File { path: "p.jpg".into(), title: String::new() } }), Applied::Nothing));
         assert_eq!(queue.items[1].file.as_deref(), Some(std::path::Path::new("p.jpg")));
-        assert!(history_entry(&queue.items[1], std::path::Path::new("p.jpg")).is_none());
+        assert!(history_entry(&queue.items[1], std::path::Path::new("p.jpg"), String::new()).is_none());
     }
 
     #[test]
@@ -494,12 +542,24 @@ mod tests {
     }
 
     #[test]
-    fn stream_suffixes_are_dropped_from_titles() {
-        assert_eq!(display_title("Me at the zoo.f133.mp4"), "Me at the zoo");
-        assert_eq!(display_title("Me at the zoo.f140-drc.m4a"), "Me at the zoo");
-        assert_eq!(display_title("노래 제목.mp4"), "노래 제목");
-        assert_eq!(display_title("v1.final.mp4"), "v1.final");
-        assert_eq!(display_title("noext"), "noext");
+    fn adding_many_skips_what_is_already_queued_and_repeats_in_the_batch() {
+        let mut queue = Queue::default();
+        queue.add(image("a.png"));
+        let added = queue.add_all(["a.png", "b.png", "b.png", "c.png"].map(image).into_iter().chain([download("x"), download("x")]));
+        assert_eq!((added, queue.items.len()), (3, 4));
+        // The same picture to another format is other work.
+        assert_eq!(queue.add_all([Work::Convert { source: "a.png".into(), target: Target::Image(ImageTarget::Webp) }]), 1);
+    }
+
+    #[test]
+    fn video_and_audio_streams_fill_the_bar_one_after_the_other() {
+        assert_eq!(download_progress("137+140", "137", 50.0), Some(0.25));
+        assert_eq!(download_progress("137+140", "137", 100.0), Some(0.5), "the video done is half of the download");
+        assert_eq!(download_progress("137+140", "140", 50.0), Some(0.75));
+        assert_eq!(download_progress("140", "140", 40.0), Some(0.4), "a single stream (audio only)");
+        assert_eq!(download_progress("137+140", "137+140", 40.0), Some(0.4), "both streams fetched together by ffmpeg");
+        assert_eq!(download_progress("", "", 40.0), Some(0.4), "a site that names no streams");
+        assert_eq!(download_progress("137+140", "", 100.0), None, "a subtitle does not move the bar");
     }
 
     #[test]

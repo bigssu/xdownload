@@ -9,7 +9,8 @@ use crate::settings::{self, HEIGHTS};
 use crate::ui::icons;
 use crate::ui::theme::{self, LINE, MUTED, PANEL, RAISED, RED, SUCCESS, TEXT, WELL};
 use crate::ui::widgets::{self as w, Kind, Tip};
-use crate::{build_version, open, reveal, App, Tab};
+use crate::shell::{open, open_or, reveal};
+use crate::{build_version, App, Tab};
 use eframe::egui::{self, pos2, vec2, Align2, FontId, Rect, RichText, Sense, Stroke, StrokeKind};
 
 const ROW_H: f32 = 46.0;
@@ -22,20 +23,19 @@ fn marker(ui: &mut egui::Ui, icon: &str, tooltip: &str) {
     response.tip(tooltip);
 }
 
-/// A sunken, rounded list area that fills the rest of the tab.
-fn list_frame(ui: &mut egui::Ui, id: &str, empty: Option<&str>, body: impl FnOnce(&mut egui::Ui)) {
+/// A sunken, rounded list area that fills the rest of the tab. Only the rows in view are
+/// drawn (`body` gets their index range), so thousands of items cost the same as a dozen.
+fn list_frame(ui: &mut egui::Ui, id: &str, rows: usize, empty: &str, body: impl FnOnce(&mut egui::Ui, std::ops::Range<usize>)) {
     let frame = egui::Frame::default().fill(WELL).stroke(Stroke::new(1.0_f32, LINE)).corner_radius(9).inner_margin(egui::Margin::same(4));
     frame.show(ui, |ui| {
-        if let Some(text) = empty {
+        if rows == 0 {
             let rect = ui.available_rect_before_wrap();
             ui.allocate_rect(rect, Sense::hover());
-            ui.painter().text(rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(13.0), MUTED);
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, empty, FontId::proportional(13.0), MUTED);
             return;
         }
-        egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            body(ui);
-        });
+        ui.spacing_mut().item_spacing.y = 2.0;
+        egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).show_rows(ui, ROW_H, rows, body);
     });
 }
 
@@ -278,9 +278,8 @@ impl App {
                 });
             });
         });
-        let empty = self.queue.items.is_empty().then(|| tr("queue_empty"));
-        list_frame(ui, "queue", empty, |ui| {
-            for item in &self.queue.items {
+        list_frame(ui, "queue", self.queue.items.len(), tr("queue_empty"), |ui, range| {
+            for item in &self.queue.items[range] {
                 ui.push_id(item.id, |ui| {
                     let (detail, color) = item_detail(item);
                     let (icon, icon_color, state_tip) = item_state(item);
@@ -347,17 +346,17 @@ impl App {
     fn history_tab(&mut self, ui: &mut egui::Ui) {
         // (index, 0 = open folder, 1 = download again, 2 = delete)
         let mut act = None;
-        let empty = self.history.is_empty().then(|| tr("history_empty"));
-        list_frame(ui, "history", empty, |ui| {
-            for (index, entry) in self.history.iter().enumerate() {
+        list_frame(ui, "history", self.history.len(), tr("history_empty"), |ui, range| {
+            for index in range {
+                let entry = &self.history[index];
                 ui.push_id(index, |ui| {
                     let title = if entry.title.is_empty() { &entry.url } else { &entry.title };
                     let sub = format!("{}   {} {}   {}", entry.when, entry.format.to_uppercase(), entry.quality, entry.url);
                     let icon = if entry.format == "mp4" { "film" } else { "music" };
                     let (rect, response) = row(ui, (icon, MUTED), title, (&sub, MUTED), 3);
                     if response.double_clicked() {
-                        // The file may have been moved or deleted since; fall back to its folder.
-                        open(if std::path::Path::new(&entry.file).is_file() { &entry.file } else { &entry.path });
+                        // The file may have been moved or deleted since; then its folder opens.
+                        open_or(&entry.file, &entry.path);
                     }
                     response.tip(tr("history_tip"));
                     row_buttons(ui, rect, |ui| {
@@ -373,12 +372,14 @@ impl App {
         let Some((index, code)) = act else { return };
         let entry = self.history[index].clone();
         match code {
-            0 if std::path::Path::new(&entry.file).is_file() => reveal(std::path::Path::new(&entry.file)),
-            0 => open(&entry.path),
+            0 => {
+                // History written by 1.0 has no file, only its folder.
+                if entry.file.is_empty() { open(&entry.path) } else { reveal(std::path::Path::new(&entry.file)) }
+            }
             1 => {
                 // Same link, the options chosen now.
                 let options = self.options();
-                let added = usize::from(self.queue.add(Work::Download { url: entry.url, options }).is_some());
+                let added = self.queue.add_all([Work::Download { url: entry.url, options }]);
                 self.tab = Tab::Download;
                 self.report_added(added, "already");
             }
@@ -411,6 +412,15 @@ impl App {
                     open(&dir.to_string_lossy());
                 }
             }
+            // Deleting the cached tools makes the next download or conversion fetch them anew.
+            // Not while start-up still prepares, updates or probes those very files.
+            ui.add_enabled_ui(!self.active && !self.starting(), |ui| {
+                if w::action_icon(ui, "retry", &format!("{} — {}", tr("set_refetch"), tr("set_refetch_tip")), Kind::Ghost, vec2(44.0, 34.0)).clicked() {
+                    let removed = crate::binaries::forget();
+                    let (key, tone) = if removed { ("refetch_done", crate::Tone::Good) } else { ("refetch_fail", crate::Tone::Bad) };
+                    self.set_notice(crate::Status::new(key), tone);
+                }
+            });
         });
         // Names and numbers stay as text: the encoder found, the version, a newer version.
         let encoder = match (self.s.gpu, self.encoder) {

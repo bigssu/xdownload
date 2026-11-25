@@ -82,7 +82,7 @@ fn worker_messages_reach_the_queue_and_mark_a_finished_download() {
     app.add_downloads();
     let id = app.queue.items[0].id;
     app.queue.start_next(Limits::new(3, false));
-    for update in [Update::Progress(0.5), Update::File("C:/out/Song.mp4".into()), Update::Finished(Outcome::Done)] {
+    for update in [Update::Progress(0.5), Update::File { path: "C:/out/Song [abcdefghijk].mp4".into(), title: "Song".into() }, Update::Finished(Outcome::Done)] {
         app.tx.send(Msg { id, update }).unwrap();
     }
     app.drain();
@@ -91,9 +91,12 @@ fn worker_messages_reach_the_queue_and_mark_a_finished_download() {
 }
 
 #[test]
-fn a_file_name_with_a_comma_is_quoted_for_explorer() {
-    // Video titles often carry commas; unquoted, Explorer opened an unrelated folder.
-    assert_eq!(select_argument(Path::new(r"C:\Users\me\Downloads\ship, one line #Shorts.mp4")), r#"/select,"C:\Users\me\Downloads\ship, one line #Shorts.mp4""#);
+fn the_save_folder_opens_once_when_the_queue_runs_dry() {
+    assert!(open_folder_now(true, false, true, true));
+    assert!(!open_folder_now(true, true, true, true), "still working");
+    assert!(!open_folder_now(false, false, true, true), "already reported last frame");
+    assert!(!open_folder_now(true, false, false, true), "only conversions ran");
+    assert!(!open_folder_now(true, false, true, false), "the setting is off");
 }
 
 #[test]
@@ -132,6 +135,7 @@ fn every_screen_draws_without_showing_a_raw_key() {
 /// `cargo test --release live -- --ignored --nocapture --test-threads 1`
 mod live {
     use super::*;
+    use std::path::Path;
     use std::time::Instant;
 
     fn temp(name: &str) -> PathBuf {
@@ -153,7 +157,7 @@ mod live {
                 }));
             }
             let Ok(msg) = rx.recv_timeout(std::time::Duration::from_secs(600)) else { panic!("no worker message for 10 minutes") };
-            if let Update::File(path) = &msg.update {
+            if let Update::File { path, .. } = &msg.update {
                 files.push(path.clone());
             }
             queue.apply(msg);
@@ -293,3 +297,4 @@ mod live {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+

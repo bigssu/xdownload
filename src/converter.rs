@@ -6,17 +6,19 @@ use std::sync::OnceLock;
 
 pub const VIDEO_EXTS: [&str; 12] = ["3gp", "avi", "flv", "m2ts", "m4v", "mkv", "mov", "mp4", "mts", "ts", "webm", "wmv"];
 pub const IMAGE_EXTS: [&str; 12] = ["avif", "bmp", "gif", "heic", "heif", "jfif", "jpeg", "jpg", "png", "tif", "tiff", "webp"];
+/// A GIF is cut to the first seconds of the video.
+const GIF_SECONDS: u32 = 30;
 /// Marks an MP4 this module made from another MP4.
 const H264_MARK: &str = "_h264_";
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum VideoTarget {
     Mp4,
     Mp3,
     Gif,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ImageTarget {
     Jpg,
     Png,
@@ -24,7 +26,7 @@ pub enum ImageTarget {
 }
 
 /// What a source file is converted into; fixed when the item is queued.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Target {
     /// `height` 0 keeps the source size; `quality` 0 quality first, 1 balanced, 2 small file.
     Video { target: VideoTarget, height: u32, quality: u8 },
@@ -60,6 +62,12 @@ impl Target {
             Target::Video { height, .. } => format!("{H264_MARK}{height}p"),
             Target::Image(_) => String::new(),
         }
+    }
+
+    /// Seconds the output is cut to: a GIF of a whole film takes many minutes and hundreds
+    /// of megabytes, so a GIF keeps the first `GIF_SECONDS`.
+    fn cut_seconds(self) -> Option<u32> {
+        matches!(self, Target::Video { target: VideoTarget::Gif, .. }).then_some(GIF_SECONDS)
     }
 
     fn accepts(self, path: &Path) -> bool {
@@ -98,6 +106,19 @@ fn is_generated_video(path: &Path) -> bool {
     tail == "src" || tail.strip_suffix('p').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// An MPEG transport stream: packets of 188 bytes (192 in Blu-ray style recordings) that
+/// each carry the sync byte 0x47. Five syncs in a row are looked for anywhere in the first
+/// 64 KB, so a leading ID3 tag or a partial first packet does not hide a real recording,
+/// while text (TypeScript) almost never lines up five `G`s at that spacing.
+fn is_mpeg_ts(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = Vec::new();
+    if std::fs::File::open(path).and_then(|file| file.take(64 * 1024).read_to_end(&mut head)).is_err() {
+        return false;
+    }
+    [188, 192].iter().any(|&stride| (0..head.len().saturating_sub(4 * stride)).any(|start| (0..5).all(|n| head[start + n * stride] == 0x47)))
+}
+
 /// Files to convert from a list of files and folders.
 ///
 /// A folder contributes the files directly inside it (and below, when `recursive`). Outputs
@@ -122,7 +143,13 @@ fn collect_folder(folder: &Path, target: Target, recursive: bool, files: &mut Ve
     let mut children: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
     children.sort_by_key(|path| path.file_name().map(|name| name.to_string_lossy().to_lowercase()));
     let (folders, here): (Vec<PathBuf>, Vec<PathBuf>) = children.into_iter().partition(|path| path.is_dir());
-    files.extend(here.into_iter().filter(|path| path.is_file() && target.accepts(path) && !(target.is_video() && is_generated_video(path))));
+    // A `.ts` in a folder is as likely TypeScript as video; only real MPEG-TS is taken.
+    let wanted = |path: &PathBuf| {
+        target.accepts(path)
+            && !(target.is_video() && is_generated_video(path))
+            && (extension(path).as_deref() != Some("ts") || is_mpeg_ts(path))
+    };
+    files.extend(here.into_iter().filter(|path| path.is_file() && wanted(path)));
     if recursive {
         for folder in folders {
             collect_folder(&folder, target, recursive, files);
@@ -221,8 +248,12 @@ fn strings(args: &[&str]) -> Vec<String> {
 
 /// ffmpeg arguments (without the program) for `target`.
 pub fn build_args(source: &Path, dest: &Path, target: Target, encoder: Encoder) -> Vec<String> {
-    let mut args = strings(&["-y", "-hide_banner", "-progress", "pipe:1", "-nostats", "-i"]);
-    args.push(text(source));
+    let mut args = strings(&["-y", "-hide_banner", "-progress", "pipe:1", "-nostats"]);
+    if let Some(seconds) = target.cut_seconds() {
+        // Before -i, so ffmpeg stops reading there; after -i it would still decode the whole file.
+        args.extend(["-t".to_owned(), seconds.to_string()]);
+    }
+    args.extend(["-i".to_owned(), text(source)]);
     match target {
         Target::Video { target: VideoTarget::Mp4, height, quality } => {
             // H.264 needs even dimensions; a height limit never enlarges.
@@ -257,6 +288,8 @@ fn clock_after(line: &str, label: &str) -> Option<f64> {
 #[derive(Default)]
 pub struct Progress {
     duration: Option<f64>,
+    /// Seconds after which the output is cut off, when it is.
+    limit: Option<f64>,
     last: Option<u8>,
 }
 
@@ -267,6 +300,7 @@ impl Progress {
         }
         let current = clock_after(line, "out_time=")?;
         let duration = self.duration.filter(|d| *d > 0.0)?;
+        let duration = self.limit.map_or(duration, |limit| duration.min(limit));
         let percent = (current / duration * 100.0).clamp(0.0, 99.0) as u8;
         (self.last != Some(percent)).then(|| {
             self.last = Some(percent);
@@ -298,7 +332,7 @@ pub fn convert(source: &Path, target: Target, ffmpeg: &str, encoder: Encoder, jo
     let dest = reserve_output(source, target)?;
     let mp4 = matches!(target, Target::Video { target: VideoTarget::Mp4, .. });
     let result = with_cpu_fallback(if mp4 { encoder } else { Encoder::Cpu }, job, |encoder| {
-        let mut progress = Progress::default();
+        let mut progress = Progress { limit: target.cut_seconds().map(f64::from), ..Default::default() };
         proc::run(ffmpeg, &build_args(source, &dest, target, encoder), job, |line| {
             if let Some(percent) = progress.feed(line) {
                 on_progress(percent);
@@ -343,12 +377,44 @@ mod tests {
 
     #[test]
     fn collects_folder_videos_without_generated_outputs_or_nested_files() {
-        let root = temp("videos", &["b.mov", "a.MP4", "done_h264_1080p.mp4", "done_h264_720p-2.mp4", "x_h264_src.mp4", "my_h264_notes.mp4", "nested/c.mkv", "note.txt"]);
+        let root = temp("videos", &["app.ts", "b.mov", "a.MP4", "done_h264_1080p.mp4", "done_h264_720p-2.mp4", "x_h264_src.mp4", "my_h264_notes.mp4", "nested/c.mkv", "note.txt"]);
         assert_eq!(names(&collect_media_files(&[root.clone()], MP4, false)), ["a.MP4", "b.mov", "my_h264_notes.mp4"]);
+        // A real transport stream next to the TypeScript file is taken, even after an ID3 tag.
+        let mut stream = b"ID3 metadata before the packets".to_vec();
+        for _ in 0..6 {
+            stream.push(0x47);
+            stream.extend([0u8; 187]);
+        }
+        std::fs::write(root.join("rec.ts"), stream).unwrap();
+        let found = names(&collect_media_files(&[root.clone()], MP4, false));
+        assert!(found.contains(&"rec.ts".to_owned()) && !found.contains(&"app.ts".to_owned()));
+        std::fs::remove_file(root.join("rec.ts")).unwrap();
         assert_eq!(names(&collect_media_files(&[root.clone()], MP4, true)), ["a.MP4", "b.mov", "my_h264_notes.mp4", "c.mkv"]);
         // A file picked by hand is taken even when it is an earlier output.
-        let picked = [root.join("done_h264_1080p.mp4"), root.join("note.txt"), root.join("missing.mp4")];
-        assert_eq!(names(&collect_media_files(&picked, MP4, false)), ["done_h264_1080p.mp4"]);
+        let picked = [root.join("done_h264_1080p.mp4"), root.join("note.txt"), root.join("missing.mp4"), root.join("app.ts")];
+        assert_eq!(names(&collect_media_files(&picked, MP4, false)), ["done_h264_1080p.mp4", "app.ts"], "a .ts picked by hand is a video");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn transport_streams_are_told_from_text() {
+        let root = temp("ts", &[]);
+        let write = |name: &str, body: Vec<u8>| {
+            std::fs::write(root.join(name), body).unwrap();
+            is_mpeg_ts(&root.join(name))
+        };
+        let packets = |stride: usize, offset: usize| {
+            let mut body = vec![0u8; offset + 6 * stride];
+            for n in 0..6 {
+                body[offset + n * stride] = 0x47;
+            }
+            body
+        };
+        assert!(write("plain.ts", packets(188, 0)));
+        assert!(write("bluray.ts", packets(192, 4)));
+        assert!(write("tagged.ts", packets(188, 1000)));
+        assert!(!write("code.ts", "const G = 'GGGG';\n".repeat(400).into_bytes()));
+        assert!(!write("short.ts", packets(188, 0)[..400].to_vec()), "too short to show five packets");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -414,7 +480,10 @@ mod tests {
         let mp3 = args(Target::Video { target: VideoTarget::Mp3, height: 0, quality: 0 }, "o.mp3");
         assert!(mp3.contains(&"-vn".to_owned()) && after(&mp3, "-c:a") == "libmp3lame" && !mp3.contains(&"h264_nvenc".to_owned()));
         let gif = args(Target::Video { target: VideoTarget::Gif, height: 0, quality: 0 }, "o.gif");
-        assert!(after(&gif, "-vf").contains("palettegen") && after(&gif, "-loop") == "0");
+        assert!(after(&gif, "-vf").contains("palettegen") && after(&gif, "-loop") == "0" && after(&gif, "-t") == "30");
+        let position = |flag: &str| gif.iter().position(|a| a == flag).unwrap();
+        assert!(position("-t") < position("-i"), "the cut must come before the input, or ffmpeg reads the whole file");
+        assert!(!mp3.contains(&"-t".to_owned()), "only GIFs are cut");
         let jpg = args(JPG, "o.jpg");
         assert_eq!((after(&jpg, "-vf"), after(&jpg, "-q:v"), after(&jpg, "-frames:v")), ("format=rgb24", "2", "1"));
         let webp = args(Target::Image(ImageTarget::Webp), "o.webp");
@@ -456,5 +525,12 @@ mod tests {
         assert_eq!(progress.feed("out_time=N/A"), None);
         assert_eq!(progress.feed("out_time=01:00:00.000000"), Some(99), "never 100 before ffmpeg exits");
         assert_eq!(progress.feed("out_time_ms=1000"), None);
+        // A 10-minute source cut to 30 seconds fills the bar over those 30 seconds.
+        let mut cut = Progress { limit: Some(30.0), ..Default::default() };
+        cut.feed("  Duration: 00:10:00.00, start: 0.000000");
+        assert_eq!(cut.feed("out_time=00:00:15.000000"), Some(50));
+        let mut short = Progress { limit: Some(30.0), ..Default::default() };
+        short.feed("  Duration: 00:00:10.00, start: 0.000000");
+        assert_eq!(short.feed("out_time=00:00:05.000000"), Some(50), "a source shorter than the cut uses its own length");
     }
 }

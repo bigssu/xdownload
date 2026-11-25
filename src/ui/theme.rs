@@ -22,10 +22,8 @@ pub const TEXT: Color32 = Color32::from_rgb(0xe8, 0xec, 0xf3);
 pub const MUTED: Color32 = Color32::from_rgb(0x8d, 0x96, 0xa6);
 pub const ACCENT: Color32 = Color32::from_rgb(0x6e, 0x8b, 0xff);
 pub const ACCENT_END: Color32 = Color32::from_rgb(142, 108, 255);
-/// Errors, the close button and the cancel button.
+/// Errors and the close button.
 pub const RED: Color32 = Color32::from_rgb(0xff, 0x4d, 0x5e);
-pub const RED_TOP: Color32 = Color32::from_rgb(255, 90, 105);
-pub const RED_BOTTOM: Color32 = Color32::from_rgb(240, 62, 80);
 pub const SUCCESS: Color32 = Color32::from_rgb(0x2b, 0xd3, 0x8a);
 pub const WINDOW_R: u8 = 14;
 

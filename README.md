@@ -31,6 +31,7 @@ Python 원본은 `main` 브랜치 이력에 있다.
 | `src/binaries.rs` | yt-dlp / ffmpeg 최초 다운로드, SHA256 검증, 캐시 |
 | `src/proc.rs` | 창 없는 자식 프로세스 실행, 줄 단위 출력, 프로세스 트리 취소 |
 | `src/update.rs` | 앱 새 버전 확인, 클립보드 링크 찾기 |
+| `src/shell.rs` | 파일·폴더·링크 열기(Windows 셸 API) |
 | `src/settings.rs` | 설정 · 기록 JSON |
 | `src/i18n.rs` | 한/영 문자열 표 |
 | `src/crashlog.rs` | 패닉 로그 |

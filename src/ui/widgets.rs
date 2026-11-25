@@ -78,8 +78,6 @@ fn motion(ui: &Ui, response: &Response) -> Rect {
 pub enum Kind {
     /// The main action: accent gradient.
     Primary,
-    /// Cancel: red gradient.
-    Danger,
     /// Secondary actions: flat raised surface.
     Ghost,
 }
@@ -104,10 +102,9 @@ pub fn action_button(ui: &mut Ui, icon: &str, label: &str, kind: Kind, size: Vec
             p.rect_stroke(r, 12, Stroke::new(1.0_f32, LINE), StrokeKind::Inside);
         }
         _ => {
-            let (base, top, bottom) = if kind == Kind::Danger { (RED, RED_TOP, RED_BOTTOM) } else { (ACCENT, ACCENT, ACCENT_END) };
             // Soft glow under the button.
-            p.rect_filled(r.translate(vec2(0.0, 4.0)).expand(2.0), 14, base.gamma_multiply(0.13));
-            paint_gradient(p, r, 12.0, top, bottom);
+            p.rect_filled(r.translate(vec2(0.0, 4.0)).expand(2.0), 14, ACCENT.gamma_multiply(0.13));
+            paint_gradient(p, r, 12.0, ACCENT, ACCENT_END);
         }
     }
     let ink = if kind == Kind::Ghost { TEXT } else { Color32::WHITE };
@@ -140,13 +137,7 @@ pub fn icon_button_sized(ui: &mut Ui, icon: &str, tooltip: &str, side: f32) -> R
     response.tip(tooltip)
 }
 
-/// A track of text options with a sliding light pill under the chosen one.
-pub fn segmented(ui: &mut Ui, id_source: impl Hash, labels: &[&str], selected: &mut usize, width: f32) -> Response {
-    let items: Vec<(&str, &str)> = labels.iter().map(|label| (*label, "")).collect();
-    segmented_tips(ui, id_source, &items, selected, width)
-}
-
-/// A segmented track whose cells are `(label, tooltip)`. A label that names an icon is drawn
+/// A track of options with a sliding light pill under the chosen one; cells are `(label, tooltip)`. A label that names an icon is drawn
 /// as that icon; its tooltip then is its name, so it must not be empty.
 pub fn segmented_tips(ui: &mut Ui, id_source: impl Hash, items: &[(&str, &str)], selected: &mut usize, width: f32) -> Response {
     debug_assert!(items.iter().all(|(label, tip)| icons::glyph(label).is_none() || !tip.trim().is_empty()), "Icon-only controls require a tooltip");
@@ -334,7 +325,7 @@ mod tests {
         let (mut selected, mut changes) = (0usize, 0);
         // The third of three cells.
         frames(&ctx, 4, || pos2(track.get().left() + track.get().width() * 5.0 / 6.0, track.get().center().y), |ui| {
-            let response = segmented(ui, "quality", &["a", "b", "c"], &mut selected, 198.0);
+            let response = segmented_tips(ui, "quality", &[("a", ""), ("b", ""), ("c", "")], &mut selected, 198.0);
             track.set(response.rect);
             changes += usize::from(response.changed());
         });

@@ -8,7 +8,7 @@
 | # | 항목 | 상태 | 근거 |
 |---|---|---|---|
 | 1 | 기능이 계획대로 동작 | ✅ | `docs/plans/V2_PLAN_20261125.md` 범위 전부 구현 |
-| 2 | 단위 테스트 통과, 빌드 경고 0 | ✅ | `cargo test` 52 통과(debug), release 51 통과 + 수동 3 |
+| 2 | 단위 테스트 통과, 빌드 경고 0 | ✅ | `cargo test` 58 통과(debug), release 57 통과 + 수동 4 |
 | 3 | 실제 네트워크 검증 | ✅ | `cargo test --release live -- --ignored`: 동시 다운로드, MP4/MP3/M4A, 자막·썸네일 포함 확인, 실패 링크 격리, GPU·CPU 변환, GIF/WebP/JPG |
 | 4 | 실제 창 조작 검증 | ✅ | `packaging/ui_smoke.ps1`: 탭 전환 → 다운로드 버튼 → 파일·기록 생성 → 목록 지우기 → 닫기 → 설정 유지 |
 | 5 | 화면 확인 (한국어·영어) | ✅ | `--screenshot` 로 네 탭 확인 |

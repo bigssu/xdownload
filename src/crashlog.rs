@@ -75,7 +75,9 @@ mod tests {
             }
             return;
         }
-        let path = std::path::PathBuf::from("target/crashlog_test/nested/crash.log");
+        // Its own folder per run: two test runs at once must not share the file.
+        let dir = std::env::temp_dir().join(format!("xdownload2_crashlog_{}", std::process::id()));
+        let path = dir.join("nested/crash.log");
         let _ = std::fs::remove_file(&path);
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
@@ -86,5 +88,6 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

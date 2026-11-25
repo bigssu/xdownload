@@ -16,6 +16,8 @@ ureq = { version = "3", default-features = false, features = ["native-tls"] }
 sha2 = "0.10"
 # Clipboard text (the version eframe already uses).
 arboard = { version = "3", default-features = false }
+# Shell API for opening files and folders (already in the tree through eframe).
+windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_System_Registry", "Win32_Foundation"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [profile.release]

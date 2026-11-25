@@ -65,8 +65,11 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Reads the settings, after clearing temporary files a killed run left in the folder.
     pub fn load() -> Self {
-        app_dir().map(|dir| read_json(&dir.join("settings.json"))).unwrap_or_default()
+        let Some(dir) = app_dir() else { return Self::default() };
+        clear_stale(&dir, std::time::Duration::from_secs(600), |name| name.ends_with(".tmp"));
+        read_json(&dir.join("settings.json"))
     }
 
     pub fn store(&self) {
@@ -111,6 +114,23 @@ pub fn push_history(items: &mut Vec<Entry>, entry: Entry) {
     items.truncate(HISTORY_MAX);
 }
 
+/// Deletes the files in `dir` that `temporary` names and nobody has written to for `age`. A
+/// run that is killed or closed mid-write cannot clean up, and the next run uses new names
+/// (they carry the process id), so its files would otherwise stay for good. A file another
+/// window is still writing changes every second and is left alone.
+pub fn clear_stale(dir: &Path, age: std::time::Duration, temporary: impl Fn(&str) -> bool) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        if !temporary(&entry.file_name().to_string_lossy()) {
+            continue;
+        }
+        let idle = entry.metadata().and_then(|meta| meta.modified()).ok().and_then(|time| time.elapsed().ok());
+        if idle.is_some_and(|idle| idle > age) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// A missing or damaged file reads as the default value.
 fn read_json<T: Default + serde::de::DeserializeOwned>(path: &Path) -> T {
     std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
@@ -123,7 +143,8 @@ fn write_json<T: Serialize>(path: &Path, value: &T) {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = path.with_extension("json.tmp");
+        // Per process: two windows saving at once must not swap in each other's half-written file.
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
         std::fs::write(&tmp, serde_json::to_string_pretty(value)?)?;
         std::fs::rename(tmp, path)
     })();
@@ -141,7 +162,7 @@ mod tests {
         let saved = Settings { language: 1, download_dir: "D:/v".into(), format: 2, height: 720, parallel: 5, gpu: false, ..Default::default() };
         write_json(&file, &saved);
         assert_eq!(read_json::<Settings>(&file), saved);
-        assert!(!file.with_extension("json.tmp").exists());
+        assert!(std::fs::read_dir(file.parent().unwrap()).unwrap().count() == 1, "no temporary file is left");
         // Unknown fields (1.0 wrote "mp3" and "quality") and missing ones are tolerated.
         std::fs::write(&file, r#"{"mp3": true, "quality": 2, "language": 1}"#).unwrap();
         let partial: Settings = read_json(&file);

@@ -8,6 +8,8 @@ use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+const YTDLP_EXE: &str = "yt-dlp.exe";
+const FFMPEG_EXE: &str = "ffmpeg.exe";
 const YTDLP_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
 const YTDLP_SUMS_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS";
 /// BtbN win64 build; only `bin/ffmpeg.exe` is taken out of the archive.
@@ -61,10 +63,18 @@ pub fn verify_sha256(path: &Path, expected: &str, label: &str) -> Res<()> {
     Err(fill("checksum_fail", &[("name", label)]))
 }
 
-/// Temporary-file suffix unique to this process, so two app windows preparing the same
-/// binary never write into each other's file.
+/// Temporary download names carry the process id, so two app windows preparing the same
+/// binary never write into each other's file. `clear_stale` knows them by these parts.
+const PART_END: &str = ".part";
+const ZIP_START: &str = "ffmpeg.";
+const ZIP_END: &str = ".zip";
+
 fn part_suffix() -> String {
-    format!(".{}.part", std::process::id())
+    format!(".{}{PART_END}", std::process::id())
+}
+
+fn ffmpeg_zip(dir: &Path) -> PathBuf {
+    dir.join(format!("{ZIP_START}{}{ZIP_END}", std::process::id()))
 }
 
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
@@ -147,7 +157,54 @@ pub fn extract_ffmpeg(zip_path: &Path, dest: &Path) -> Res<()> {
 fn bin_dir() -> Res<PathBuf> {
     let dir = crate::settings::app_dir().ok_or("APPDATA is not set")?.join("bin");
     std::fs::create_dir_all(&dir).map_err(err)?;
+    // Leftovers only come from an earlier run, so one look per run is enough.
+    static CLEARED: std::sync::Once = std::sync::Once::new();
+    CLEARED.call_once(|| crate::settings::clear_stale(&dir, std::time::Duration::from_secs(600), is_temporary));
     Ok(dir)
+}
+
+/// A download or extraction in progress, or one a closed run left behind.
+fn is_temporary(name: &str) -> bool {
+    name.ends_with(PART_END) || (name.starts_with(ZIP_START) && name.ends_with(ZIP_END))
+}
+
+/// Deletes the cached yt-dlp and ffmpeg so they are downloaded again when next needed (the
+/// way out of a damaged or broken copy). False when a file could not be removed.
+pub fn forget() -> bool {
+    // try_lock: this runs on the UI thread and must not wait for a download in progress. A
+    // lock poisoned by an earlier panic is still usable, as in `ensure_*`.
+    let _guard = match PREPARING.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return false,
+    };
+    bin_dir().is_ok_and(|dir| retire(&dir, &[YTDLP_EXE, FFMPEG_EXE]))
+}
+
+/// Moves `names` in `dir` out of the way, all or none, and deletes them when it can. A tool
+/// another window is running cannot be deleted but can be renamed; the renamed copy ends in
+/// `.part`, so a later run clears it once nothing uses it.
+fn retire(dir: &Path, names: &[&str]) -> bool {
+    let old_suffix = format!(".{}.old{PART_END}", std::process::id());
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for name in names {
+        let (path, old) = (dir.join(name), dir.join(format!("{name}{old_suffix}")));
+        match std::fs::rename(&path, &old) {
+            Ok(()) => moved.push((path, old)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                // Put back what was already moved: never one tool gone and the other kept.
+                for (path, old) in moved {
+                    let _ = std::fs::rename(old, path);
+                }
+                return false;
+            }
+        }
+    }
+    for (_, old) in moved {
+        let _ = std::fs::remove_file(old);
+    }
+    true
 }
 
 /// One preparation at a time inside this process: queue items that start together wait here
@@ -157,10 +214,10 @@ static PREPARING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// Path of yt-dlp.exe, downloading it first when missing.
 pub fn ensure_ytdlp(job: &Job, on_progress: &mut dyn FnMut(f32)) -> Res<String> {
     let _guard = PREPARING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let path = bin_dir()?.join("yt-dlp.exe");
+    let path = bin_dir()?.join(YTDLP_EXE);
     if !path.exists() {
         let agent = agent();
-        let expected = fetch_expected(YTDLP_SUMS_URL, "yt-dlp.exe")?;
+        let expected = fetch_expected(YTDLP_SUMS_URL, YTDLP_EXE)?;
         download_file(&agent, YTDLP_URL, &path, &expected, "yt-dlp", job, on_progress)?;
     }
     Ok(path.to_string_lossy().into_owned())
@@ -170,12 +227,12 @@ pub fn ensure_ytdlp(job: &Job, on_progress: &mut dyn FnMut(f32)) -> Res<String> 
 pub fn ensure_ffmpeg(job: &Job, on_progress: &mut dyn FnMut(f32)) -> Res<String> {
     let _guard = PREPARING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = bin_dir()?;
-    let path = dir.join("ffmpeg.exe");
+    let path = dir.join(FFMPEG_EXE);
     if !path.exists() {
         let agent = agent();
         // Verifying the archive extends trust to the ffmpeg.exe inside it.
         let expected = fetch_expected(&format!("{FFMPEG_BASE_URL}{FFMPEG_SUMS}"), FFMPEG_ZIP)?;
-        let zip_path = dir.join(format!("ffmpeg.{}.zip", std::process::id()));
+        let zip_path = ffmpeg_zip(&dir);
         let result = download_file(&agent, &format!("{FFMPEG_BASE_URL}{FFMPEG_ZIP}"), &zip_path, &expected, "ffmpeg", job, on_progress)
             .and_then(|()| extract_ffmpeg(&zip_path, &path));
         let _ = std::fs::remove_file(&zip_path);
@@ -233,9 +290,44 @@ mod tests {
     }
 
     #[test]
+    fn old_temporary_files_are_cleared_and_everything_else_is_kept() {
+        let dir = temp("stale");
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        for (name, old) in [("ffmpeg.111.zip", true), ("yt-dlp.exe.111.part", true), ("ffmpeg.222.zip", false), ("ffmpeg.3.zip.keep", true), ("ffmpeg.exe", true), ("yt-dlp.exe", true), ("notes.txt", true)] {
+            let file = std::fs::File::create(dir.join(name)).unwrap();
+            if old {
+                file.set_modified(hour_ago).unwrap();
+            }
+        }
+        crate::settings::clear_stale(&dir, std::time::Duration::from_secs(600), is_temporary);
+        let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left, ["ffmpeg.222.zip", "ffmpeg.3.zip.keep", "ffmpeg.exe", "notes.txt", "yt-dlp.exe"], "only old temporary files go; a download in progress stays");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn retiring_moves_every_tool_or_none() {
+        let dir = temp("retire");
+        for name in ["a.exe", "b.exe"] {
+            std::fs::write(dir.join(name), name).unwrap();
+        }
+        assert!(retire(&dir, &["a.exe", "missing.exe", "b.exe"]), "a tool that is not there yet counts as gone");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        // A tool that cannot be moved (a folder of that name stands in for a locked file once
+        // renaming onto an existing folder fails) leaves the other one in place too.
+        std::fs::write(dir.join("a.exe"), "a").unwrap();
+        std::fs::create_dir_all(dir.join("b.exe")).unwrap();
+        std::fs::create_dir_all(dir.join(format!("b.exe.{}.old.part", std::process::id())).join("x")).unwrap();
+        assert!(!retire(&dir, &["a.exe", "b.exe"]));
+        assert_eq!(std::fs::read_to_string(dir.join("a.exe")).unwrap(), "a", "the first tool was put back");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn ffmpeg_is_extracted_from_the_nested_bin_folder() {
         let dir = temp("zip");
-        let zip_path = dir.join(format!("ffmpeg.{}.zip", std::process::id()));
+        let zip_path = ffmpeg_zip(&dir);
         let write = |members: &[(&str, &str)]| {
             let mut writer = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
             for (name, body) in members {
